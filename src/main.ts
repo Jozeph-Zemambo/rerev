@@ -79,7 +79,7 @@ const WATCH_LABEL: Record<BluetoothState, string> = {
   off: 'Connect your watch',
   connecting: 'Connecting to your watch…',
   connected: 'Watch connected',
-  lost: 'Watch out of reach, retrying…',
+  lost: 'Watch lost: turn its beacon on, retrying…',
 };
 watch.onReading = bpm => {
   heart.reportWatch(bpm);

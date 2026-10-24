@@ -15,7 +15,11 @@ type Bluetooth = {
 };
 
 const bluetooth = (navigator as Navigator & { bluetooth?: Bluetooth }).bluetooth;
-const RECONNECT_TRIES = 5;
+/**
+ * After a drop, keep trying to reconnect this often for as long as the page is open. Reconnecting
+ * to a watch already picked needs no tap, only the watch advertising again (its app's "beacon").
+ */
+const RECONNECT_EVERY = 4000;
 
 export type BluetoothState = 'off' | 'connecting' | 'connected' | 'lost';
 
@@ -26,6 +30,7 @@ export class BluetoothHeartRate {
   onReading: (bpm: number) => void = () => {};
   onState: (state: BluetoothState) => void = () => {};
   private device: Device | null = null;
+  private retrying = false;
 
   /** Pick the watch from Chrome's chooser. Must be called from a tap. */
   async pair() {
@@ -70,20 +75,26 @@ export class BluetoothHeartRate {
     this.setState('connected');
   }
 
-  /** The watch dropped out (asleep, out of range): try again a few times, backing off. */
+  /** The watch dropped out (asleep, out of range, beacon off): keep trying until it's back. */
   private async reconnect(device: Device) {
-    if (this.device !== device) return;
+    if (this.device !== device || this.retrying) return;
+    this.retrying = true;
     this.setState('lost');
-    for (let attempt = 1; attempt <= RECONNECT_TRIES && this.device === device; attempt++) {
-      await new Promise(resolve => setTimeout(resolve, attempt * 1500));
-      try {
-        await this.subscribe(device);
-        return;
-      } catch {
-        // Still out of reach; try again.
+    try {
+      while (this.device === device) {
+        await new Promise(resolve => setTimeout(resolve, RECONNECT_EVERY));
+        if (this.device !== device) return;
+        try {
+          await this.subscribe(device);
+          return;
+        } catch {
+          // Still out of reach (or the beacon is off); try again.
+          this.setState('lost');
+        }
       }
+    } finally {
+      this.retrying = false;
     }
-    if (this.device === device) this.setState('lost');
   }
 
   private setState(state: BluetoothState) {
