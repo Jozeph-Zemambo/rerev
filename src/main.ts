@@ -575,9 +575,17 @@ renderer.setAnimationLoop((time, frame) => {
   const now = performance.now() / 1000;
   const referenceSpace = renderer.xr.getReferenceSpace();
 
+  let trackingLost = false;
   if (frame && referenceSpace) {
+    const viewer = frame.getViewerPose(referenceSpace);
+    trackingLost = !viewer || viewer.emulatedPosition;
     if (hitTestSource && !placed) {
-      const pose = frame.getHitTestResults(hitTestSource)[0]?.getPose(referenceSpace);
+      // Only floor-like surfaces: facing up (not a wall) and well below the phone (not a table).
+      const cameraY = viewer?.transform.position.y ?? 0;
+      const pose = frame
+        .getHitTestResults(hitTestSource)
+        .map(hit => hit.getPose(referenceSpace))
+        .find(p => p && p.transform.matrix[5] > 0.9 && cameraY - p.transform.position.y > 0.6);
       reticle.visible = !!pose;
       if (pose) reticle.matrix.fromArray(pose.transform.matrix);
     }
@@ -643,7 +651,8 @@ renderer.setAnimationLoop((time, frame) => {
       paceMetersPerSecond: recorder.pace,
       leadMeters: Math.max(0, partner.s - runnerS),
     });
-    if (now >= messageHoldUntil) hud.say(stateMessage(partner.state));
+    if (trackingLost) hud.say('Lost track of the ground. Hold the phone steady and point it at the floor ahead.');
+    else if (now >= messageHoldUntil) hud.say(stateMessage(partner.state));
     const breakLabel = partner.breaking ? "Let's go" : 'Take a break';
     if (hud.breakButton.textContent !== breakLabel) hud.breakButton.textContent = breakLabel;
     bubble.update(point, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera, now);
