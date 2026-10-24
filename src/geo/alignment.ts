@@ -44,7 +44,10 @@ const base = (p: Enu): ArPoint => ({ x: p.e, z: -p.n });
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
 export function apply(t: GeoTransform, p: Enu): ArPoint {
-  const b = base(p);
+  return applyBase(t, base(p));
+}
+
+function applyBase(t: GeoTransform, b: ArPoint): ArPoint {
   const c = Math.cos(t.theta);
   const s = Math.sin(t.theta);
   return { x: c * b.x + s * b.z + t.tx, z: -s * b.x + c * b.z + t.tz };
@@ -63,7 +66,7 @@ export function arBearing(dx: number, dz: number): number {
  */
 export class GeoAligner {
   transform: GeoTransform | null = null;
-  /** For diagnostics: how many refits, and how far the last one moved the route. */
+  /** For diagnostics: how many refits, and how far the last one moved the route under the runner. */
   readonly stats = { refits: 0, lastShift: 0, lastTurnDeg: 0 };
   private pairs: Pair[] = [];
 
@@ -117,10 +120,14 @@ export class GeoAligner {
     // scripts/align-bench.ts shows them then doing more harm than good.
     const gps = this.pairs.filter(pair => pair.kind === 'gps');
     const route = this.pairs.filter(pair => pair.kind === 'route');
-    const usable = spread(gps) >= MIN_SPREAD ? gps : spread(route) >= MIN_ROUTE_SPREAD ? route : null;
+    const gpsReady = spread(gps) >= MIN_SPREAD && gps.length >= 4;
+    const usable = gpsReady ? gps : spread(route) >= MIN_ROUTE_SPREAD ? route : null;
     if (!usable || usable.length < 4) return false;
     const fit = fitTransform(usable, this.transform);
     const t = this.transform;
+    // For diagnostics: how far the route moved where the runner was last seen.
+    const last = this.pairs[this.pairs.length - 1].p;
+    const before = applyBase(t, last);
     const turn = wrap(fit.theta - t.theta) * BLEND;
     const shiftX = (fit.tx - t.tx) * BLEND;
     const shiftZ = (fit.tz - t.tz) * BLEND;
@@ -128,7 +135,8 @@ export class GeoAligner {
     t.tx += shiftX;
     t.tz += shiftZ;
     this.stats.refits++;
-    this.stats.lastShift = Math.hypot(shiftX, shiftZ);
+    const after = applyBase(t, last);
+    this.stats.lastShift = Math.hypot(after.x - before.x, after.z - before.z);
     this.stats.lastTurnDeg = (turn * 180) / Math.PI;
     return true;
   }
@@ -178,7 +186,8 @@ export function fitTransform(pairs: Pair[], from: GeoTransform): GeoTransform {
       if (normal) {
         const nx = c * normal.x + s * normal.z;
         const nz = -s * normal.x + c * normal.z;
-        row(nx * az - nz * ax, nx, nz, nx * rx + nz * rz, weight);
+        // d(n·r)/dθ: the point turns, and so does the route's normal.
+        row(nx * az - nz * ax + nz * rx - nx * rz, nx, nz, nx * rx + nz * rz, weight);
       } else {
         row(az, 1, 0, rx, weight);
         row(-ax, 0, 1, rz, weight);
