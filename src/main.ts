@@ -200,7 +200,7 @@ function respond(intent: Intent | 'chat', reply?: string) {
     case 'go':
       if (!partner.breaking) return say("I'm right here. Let's keep it up!", 'cheer');
       partner.setBreak(false);
-      coach.autoBreak = false;
+      coach.resume(performance.now() / 1000);
       return say("Alright, let's go!", 'cheer', true);
     case 'faster':
       partner.nudgePace(0.3);

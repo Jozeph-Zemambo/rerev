@@ -18,6 +18,10 @@ const PUSH_AFTER = 25;
 const PUSH_COOLDOWN = 45;
 const ENCOURAGE_EVERY = 75;
 const MIN_GAP = 6;
+/** After the runner chooses to set off again, don't call another breather for this long. */
+const RESUME_GRACE = 30;
+/** If heart rate disappears during an automatic breather (watch dropped), give up waiting after this. */
+const NO_HEART_RESUME = 60;
 
 const ENCOURAGEMENT = [
   'Nice rhythm. Right in the zone!',
@@ -53,8 +57,21 @@ export class Coach {
   private lastEncourage = 0;
   private eased = false;
   private encourageIndex = 0;
+  private graceUntil = 0;
+  private noHeartSince: number | null = null;
+
+  /** The runner set off again by choice: restart the clocks and hold off on another breather. */
+  resume(now: number) {
+    this.autoBreak = false;
+    this.recoveringSince = null;
+    this.bandSince = now;
+    this.wellAboveSince = null;
+    this.graceUntil = now + RESUME_GRACE;
+  }
 
   reset(now: number) {
+    this.graceUntil = 0;
+    this.noHeartSince = null;
     this.effort = 1;
     this.autoBreak = false;
     this.band = 'in';
@@ -70,8 +87,15 @@ export class Coach {
   update(now: number, bpm: number | null, partner: Partner): CoachLine | null {
     if (bpm === null) {
       this.effort += (1 - this.effort) * 0.02;
+      this.noHeartSince ??= now;
+      if (this.autoBreak && partner.breaking && now - this.noHeartSince >= NO_HEART_RESUME) {
+        this.resume(now);
+        partner.setBreak(false);
+        return this.say(now, { text: "Lost your heart rate, but you've rested a while. Let's go!", mood: 'cheer' }, true);
+      }
       return null;
     }
+    this.noHeartSince = null;
     this.updateBand(now, bpm);
     const inBand = now - this.bandSince;
 
@@ -95,14 +119,19 @@ export class Coach {
       return null;
     }
 
-    if (partner.breaking) return null;
+    if (partner.breaking) {
+      // A breather the runner chose: keep the clocks fresh so "let's go" doesn't trip an instant break.
+      this.bandSince = now;
+      this.wellAboveSince = null;
+      return null;
+    }
 
     if (bpm > this.zone.high + WELL_ABOVE) this.wellAboveSince ??= now;
     else this.wellAboveSince = null;
     const wellAboveFor = this.wellAboveSince === null ? 0 : now - this.wellAboveSince;
 
     if (this.band === 'above') {
-      if (inBand >= BREAK_AFTER || wellAboveFor >= WELL_ABOVE_AFTER) {
+      if (now >= this.graceUntil && (inBand >= BREAK_AFTER || wellAboveFor >= WELL_ABOVE_AFTER)) {
         this.autoBreak = true;
         this.recoveringSince = null;
         partner.setBreak(true);
