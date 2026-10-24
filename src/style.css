@@ -273,6 +273,23 @@ button.stat { pointer-events: auto; }
   flex-direction: column;
   gap: 10px;
 }
+#score {
+  align-self: flex-start;
+  display: flex;
+  gap: 12px;
+  background: var(--glass);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+#score .star { color: #ffd34d; }
+#score .coin { color: #f5b400; }
+#score b { color: var(--glass-ink); }
+#score.bump { animation: score-bump 220ms cubic-bezier(0.23, 1, 0.32, 1); }
+@keyframes score-bump { 50% { transform: scale(1.12); } }
 #message {
   background: var(--glass);
   border-radius: var(--radius);
@@ -303,4 +320,5 @@ button.stat { pointer-events: auto; }
 @media (prefers-reduced-motion: reduce) {
   .card-button, .big-button { transition: none; }
   .bubble.pop span { animation: none; }
+  #score.bump { animation: none; }
 }

@@ -17,6 +17,8 @@ import { Planner, type RunGoal } from './ui/planner';
 import { SpeechBubble } from './ui/speechBubble';
 import { showRecentRuns, SummaryScreen } from './ui/summary';
 import { BrowserVoice } from './ui/voice';
+import { Sounds } from './ui/sounds';
+import { Collectibles } from './world/collectibles';
 import { HazardMarkers } from './world/hazardMarkers';
 import { demoRoute, Path, type RoutePoint } from './world/path';
 import { createShadow } from './world/shadow';
@@ -86,6 +88,11 @@ const shadow = createShadow();
 shadow.visible = false;
 scene.add(shadow);
 const partner = new Partner(path);
+const collectibles = new Collectibles();
+scene.add(collectibles.group);
+const sounds = new Sounds();
+const COIN_QUIPS = ['Cha-ching!', 'Shiny!', 'Ooh, a coin!', 'Treasure!'];
+let quip = 0;
 const depthSensor = new DepthSensor();
 const groundRays = new GroundRays();
 
@@ -168,6 +175,7 @@ async function startRun(next: RunMode) {
   partner.goalPace = next.kind === 'route' ? 1000 / next.goal.paceSecondsPerKm : QUICK_PACE;
   coach.zone = next.kind === 'route' ? next.goal.zone : DEFAULT_ZONE;
   heart.resetSimulation();
+  sounds.unlock();
   routeRun = next.kind === 'route' ? new RouteRun(next.goal.route) : null;
   // Sensor permissions must be requested from this tap.
   if (next.kind === 'route') {
@@ -192,6 +200,7 @@ function endRun() {
   mascot.root.visible = false;
   shadow.visible = false;
   markers.clear();
+  collectibles.clear();
   if (sim.world) {
     scene.remove(sim.world.group);
     sim.world = null;
@@ -219,6 +228,8 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   map.reset();
   for (const seed of seeds) map.seedGround(seed.x, floorY, seed.z, 1);
   path.setRoute(points, floorY);
+  collectibles.layout(path.length);
+  hud.showScore(0, 0);
   partner.reset(runnerS);
   partner.effort = 1;
   runStartedAt = performance.now() / 1000;
@@ -516,6 +527,20 @@ renderer.setAnimationLoop((time, frame) => {
     partner.update(dt, runnerS);
     recorder.update(now, runnerS, heart.bpm, partner.breaking);
     announce();
+
+    // Stars and coins: in AR the runner is the phone; in preview, the simulated runner on the path.
+    const feet = sim.world ? path.pointAt(runnerS, new THREE.Vector3()) : runner;
+    for (const kind of collectibles.update(dt, seconds, path, runnerS, feet)) {
+      if (kind === 'star') {
+        recorder.stars++;
+        sounds.star();
+      } else {
+        recorder.coins++;
+        sounds.coin();
+        bubble.show({ text: COIN_QUIPS[quip++ % COIN_QUIPS.length], mood: 'cheer' }, now);
+      }
+      hud.showScore(recorder.stars, recorder.coins);
+    }
 
     path.pointAt(partner.s, point);
     path.tangentAt(partner.s, tangent);

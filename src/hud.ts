@@ -46,6 +46,21 @@ export class Hud {
     this.root.hidden = !visible;
   }
 
+  private readonly score = byId('score');
+  private readonly scoreStars = byId('score-stars');
+  private readonly scoreCoins = byId('score-coins');
+
+  showScore(stars: number, coins: number) {
+    const s = String(stars);
+    const c = String(coins);
+    if (this.scoreStars.textContent === s && this.scoreCoins.textContent === c) return;
+    this.scoreStars.textContent = s;
+    this.scoreCoins.textContent = c;
+    this.score.classList.remove('bump');
+    void this.score.offsetWidth;
+    this.score.classList.add('bump');
+  }
+
   say(text: string) {
     if (this.message.textContent !== text) this.message.textContent = text;
   }
