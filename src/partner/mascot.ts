@@ -7,7 +7,13 @@ export type Gait = {
   inPlace: boolean;
   /** Rise over run of the ground (positive = uphill). */
   grade: number;
+  /** Standing about before a run: a little bounce, and a wave now and then. */
+  idle?: boolean;
 };
+
+/** While idle, waves for WAVE_FOR seconds out of every WAVE_EVERY. */
+const WAVE_EVERY = 4.5;
+const WAVE_FOR = 1.8;
 
 /**
  * A cartoon bean built from primitives and animated procedurally, so it needs no rig or
@@ -23,6 +29,8 @@ export class Mascot {
   private phase = 0;
   private swing = 0;
   private lean = 0;
+  private idle = 0;
+  private wave = 0;
 
   constructor(color: THREE.ColorRepresentation = 0x45c08f) {
     const skin = new THREE.MeshStandardMaterial({ color, roughness: 0.5 });
@@ -99,5 +107,14 @@ export class Mascot {
     this.body.rotation.x = this.lean;
     const breathe = (1 - this.swing) * Math.sin(timeSeconds * 2.2) * 0.015;
     this.torso.scale.set(1, 1 - Math.abs(Math.cos(this.phase)) * 0.05 * this.swing + breathe, 1);
+
+    // Idle: bob on the spot and wave one arm overhead every few seconds. Only the pose changes.
+    this.idle += ((gait.idle ? 1 : 0) - this.idle) * Math.min(1, dt * 4);
+    const waving = gait.idle && timeSeconds % WAVE_EVERY < WAVE_FOR;
+    this.wave += ((waving ? 1 : 0) - this.wave) * Math.min(1, dt * 6);
+    this.body.position.y += Math.abs(Math.sin(timeSeconds * 3.2)) * 0.025 * this.idle;
+    const right = this.arms[1];
+    right.rotation.z = 0.28 + this.wave * (2.3 + Math.sin(timeSeconds * 11) * 0.35);
+    if (this.wave > 0.01) right.rotation.x *= 1 - this.wave;
   }
 }
