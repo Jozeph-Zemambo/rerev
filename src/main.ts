@@ -408,6 +408,9 @@ async function startAr() {
     renderer.xr.setReferenceSpaceType('local');
     await renderer.xr.setSession(session);
   } catch (error) {
+    mode = null;
+    routeRun = null;
+    gps.stop();
     alert(`Couldn't start AR: ${(error as Error).message}`);
   }
 }
