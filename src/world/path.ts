@@ -115,11 +115,14 @@ export class Path {
       this.nx[i] = tz;
       this.nz[i] = -tx;
     }
-    this.lastProjected = 0;
     this.status.blockedAtS = null;
     this.status.blockReason = null;
     this.status.detouring = false;
-    this.status.seenUntilS = 0;
+    // A re-anchored route keeps its progress; distances along it haven't changed.
+    if (!reanchor) {
+      this.lastProjected = 0;
+      this.status.seenUntilS = 0;
+    }
   }
 
   get ready() {
@@ -150,21 +153,40 @@ export class Path {
 
   /** Distance along the route nearest to a position. Searches near the last answer first. */
   project(position: THREE.Vector3): number {
+    // Nearest point, but jumps along the route cost extra: you can't teleport, so when two
+    // stretches of route run side by side, staying on the one you were on wins.
     const search = (from: number, to: number) => {
       let best = from;
+      let bestScore = Infinity;
       let bestDistance = Infinity;
       for (let i = from; i <= to; i++) {
         const d = (this.xs[i] - position.x) ** 2 + (this.zs[i] - position.z) ** 2;
-        if (d < bestDistance) {
+        const jump = Math.max(0, Math.abs(i - this.lastProjected) * STEP - 1.5) * 0.35;
+        if (d + jump * jump < bestScore) {
+          bestScore = d + jump * jump;
           bestDistance = d;
           best = i;
         }
       }
       return { best, bestDistance };
     };
-    const window = 200;
-    let { best, bestDistance } = search(Math.max(0, this.lastProjected - window), Math.min(this.count - 1, this.lastProjected + window));
-    if (bestDistance > 9) ({ best } = search(0, this.count - 1));
+    // Track progress continuously: look a little behind and further ahead of where you were.
+    // A loop starts and ends in the same place, so a whole-route search could jump to the finish.
+    const behind = Math.round(15 / STEP);
+    const ahead = Math.round(30 / STEP);
+    const near = search(Math.max(0, this.lastProjected - behind), Math.min(this.count - 1, this.lastProjected + ahead));
+    let best = near.best;
+    if (near.bestDistance > 25 * 25) {
+      // Really lost (more than 25 m off): search everywhere, preferring places near the last one.
+      let score = Infinity;
+      for (let i = 0; i < this.count; i++) {
+        const d = (this.xs[i] - position.x) ** 2 + (this.zs[i] - position.z) ** 2 + ((i - this.lastProjected) * STEP * 0.5) ** 2;
+        if (d < score) {
+          score = d;
+          best = i;
+        }
+      }
+    }
     this.lastProjected = best;
     return best * STEP;
   }

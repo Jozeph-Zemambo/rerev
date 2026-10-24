@@ -6,6 +6,8 @@ const SAMPLE_EVERY = 3;
 const FLUSH_EVERY = 15;
 /** Your pace is smoothed over this many seconds so a single step doesn't swing it. */
 const PACE_WINDOW = 6;
+/** Recorded distance never grows faster than a sprint, so one bad projection can't add metres. */
+const MAX_SPEED = 9;
 
 export type RunSummary = {
   distance: number;
@@ -34,6 +36,7 @@ export class RunRecorder {
   private runId: Id<'runs'> | null = null;
   private startedAt = 0;
   private distance = 0;
+  private lastUpdate = 0;
   private history: { t: number; s: number }[] = [];
   private pending: Sample[] = [];
   private lastSample = 0;
@@ -57,6 +60,7 @@ export class RunRecorder {
     this.startedAt = now;
     this.lastSample = now;
     this.lastFlush = now;
+    this.lastUpdate = now;
     this.history = [];
     this.pending = [];
     this.runId = null;
@@ -76,7 +80,9 @@ export class RunRecorder {
 
   /** Call every frame with the runner's distance along the route. */
   update(now: number, runnerS: number, bpm: number | null, breaking: boolean) {
-    this.distance = Math.max(this.distance, runnerS);
+    const dt = Math.max(0, now - this.lastUpdate);
+    this.lastUpdate = now;
+    if (runnerS > this.distance) this.distance = Math.min(runnerS, this.distance + MAX_SPEED * dt);
     this.history.push({ t: now, s: runnerS });
     while (this.history.length > 2 && now - this.history[0].t > PACE_WINDOW) this.history.shift();
     const oldest = this.history[0];
