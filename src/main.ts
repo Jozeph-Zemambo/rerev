@@ -139,7 +139,7 @@ const path = new Path();
 scene.add(path.group);
 const markers = new HazardMarkers();
 scene.add(markers.mesh);
-const mascot = new Mascot();
+const mascot = new Mascot('blue');
 mascot.root.visible = false;
 scene.add(mascot.root);
 const shadow = createShadow();
@@ -1220,7 +1220,7 @@ addEventListener('resize', () => {
 });
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { rerev: { path, partner, map, camera, sim, coach, heart, commands, recorder, voice, hear, getRouteRun: () => routeRun } });
+  Object.assign(window, { rerev: { path, partner, mascot, map, camera, sim, coach, heart, commands, recorder, voice, hear, getRouteRun: () => routeRun } });
 }
 
 void (async () => {

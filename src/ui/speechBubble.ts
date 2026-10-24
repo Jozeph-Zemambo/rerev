@@ -1,10 +1,11 @@
 import * as THREE from 'three';
+import { BUDDY_HEIGHT } from '../partner/mascot';
 import type { Mood } from '../voice/lines';
 
 export type BubbleLine = { text: string; mood: Mood };
 
-/** How high above the buddy's feet the bubble's tail points. */
-const HEAD_HEIGHT = 1.15;
+/** How high above the buddy's feet the bubble's tail points: just over its head. */
+const HEAD_HEIGHT = BUDDY_HEIGHT + 0.12;
 
 /**
  * A speech bubble that floats above the buddy's head. It lives in the DOM overlay (so it also

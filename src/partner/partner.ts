@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Path } from '../world/path';
-import type { Gait } from './mascot';
+import type { Gait } from './buddyMotion';
 
 export type PartnerState = 'run' | 'stairs' | 'look' | 'turn' | 'wait' | 'break' | 'blocked' | 'done';
 
@@ -67,6 +67,7 @@ export class Partner {
       speed: this.speed,
       inPlace: this.state !== 'run' && this.state !== 'stairs' && !(this.state === 'look' && this.speed > 0.3),
       grade: this.path.ready ? this.path.gradeAt(this.s) : 0,
+      state: this.state,
     };
   }
 

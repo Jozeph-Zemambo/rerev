@@ -1,25 +1,19 @@
 import * as THREE from 'three';
-
-export type Gait = {
-  /** Forward speed in metres per second. */
-  speed: number;
-  /** Jogging on the spot (waiting for you, or on a break). */
-  inPlace: boolean;
-  /** Rise over run of the ground (positive = uphill). */
-  grade: number;
-  /** Standing about before a run: a little bounce, and a wave now and then. */
-  idle?: boolean;
-};
+import type { Gait } from './buddyMotion';
 
 /** While idle, waves for WAVE_FOR seconds out of every WAVE_EVERY. */
 const WAVE_EVERY = 4.5;
 const WAVE_FOR = 1.8;
 
+/** Height of the bean's head, in metres. */
+export const BEAN_HEIGHT = 1.02;
+
 /**
  * A cartoon bean built from primitives and animated procedurally, so it needs no rig or
- * model file. Faces +Z. About 1 m tall.
+ * model file. Faces +Z. BEAN_HEIGHT tall. Stands in for the buddy model while it loads, or if
+ * it can't be loaded.
  */
-export class Mascot {
+export class Bean {
   readonly root = new THREE.Group();
 
   private readonly body = new THREE.Group();
@@ -31,9 +25,11 @@ export class Mascot {
   private lean = 0;
   private idle = 0;
   private wave = 0;
+  private readonly skin: THREE.MeshStandardMaterial;
 
   constructor(color: THREE.ColorRepresentation = 0x45c08f) {
     const skin = new THREE.MeshStandardMaterial({ color, roughness: 0.5 });
+    this.skin = skin;
     const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.25 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x14201b, roughness: 0.4 });
 
@@ -81,6 +77,10 @@ export class Mascot {
       this.body.add(shoulder);
       return shoulder;
     });
+  }
+
+  setColor(color: THREE.ColorRepresentation) {
+    this.skin.color.set(color);
   }
 
   update(dt: number, timeSeconds: number, gait: Gait) {

@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { BUDDY_HEIGHT } from '../partner/mascot';
+
+/** Width of the blob, in proportion to the buddy's height. */
+const SHADOW_SIZE = BUDDY_HEIGHT * 0.6;
 
 /** Soft blob shadow: the cheapest strong cue that a character is touching the real floor. */
 export function createShadow(): THREE.Mesh {
@@ -11,7 +15,7 @@ export function createShadow(): THREE.Mesh {
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, 128, 128);
   return new THREE.Mesh(
-    new THREE.PlaneGeometry(0.7, 0.7).rotateX(-Math.PI / 2),
+    new THREE.PlaneGeometry(SHADOW_SIZE, SHADOW_SIZE).rotateX(-Math.PI / 2),
     new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true, depthWrite: false }),
   );
 }
