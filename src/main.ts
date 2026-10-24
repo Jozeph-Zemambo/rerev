@@ -125,10 +125,27 @@ const sim = {
 // ---------------------------------------------------------------- screens
 
 byId('go-plan').onclick = () => {
+  askForMicrophone();
   homeScreen.hidden = true;
   planner.open();
 };
-byId('go-indoor').onclick = () => void startRun({ kind: 'quick' });
+byId('go-indoor').onclick = () => {
+  askForMicrophone();
+  void startRun({ kind: 'quick' });
+};
+
+/**
+ * Ask for the microphone from a tap on a normal screen, so voice commands don't need a
+ * permission prompt mid-AR (where Chrome may not show it). Not awaited: AR must start from
+ * the same tap.
+ */
+function askForMicrophone() {
+  if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) return;
+  navigator.mediaDevices
+    ?.getUserMedia({ audio: true })
+    .then(stream => stream.getTracks().forEach(track => track.stop()))
+    .catch(() => {});
+}
 planner.onBack = () => {
   planner.close();
   homeScreen.hidden = false;
