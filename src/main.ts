@@ -18,6 +18,7 @@ import { PreviewWorld } from './sim/previewWorld';
 import { Planner, type RunGoal } from './ui/planner';
 import { SpeechBubble } from './ui/speechBubble';
 import { showRecentRuns, SummaryScreen } from './ui/summary';
+import { Diagnostics } from './ui/diagnostics';
 import { BrowserVoice } from './ui/voice';
 import { VoiceCommands, type Intent } from './ui/voiceCommands';
 import { formatDistance } from './ui/summary';
@@ -102,6 +103,9 @@ const COIN_QUIPS = ['Cha-ching!', 'Shiny!', 'Ooh, a coin!', 'Treasure!'];
 let quip = 0;
 const depthSensor = new DepthSensor();
 const groundRays = new GroundRays();
+const diagnostics = new Diagnostics(byId('lead-stat'));
+let depthPoints = 0;
+let rayHits = 0;
 
 let arSupported = false;
 let mode: RunMode | null = null;
@@ -591,6 +595,32 @@ function announce() {
   wasDetouring = path.status.detouring;
 }
 
+/** What the sensors are doing right now, for the on-phone diagnostics readout. */
+function diagnosticRows(runnerS: number, trackingLost: boolean): [string, string][] {
+  const fix = gps.latest;
+  const heading = compass.heading;
+  const onPath = path.pointAt(runnerS, new THREE.Vector3());
+  const rows: [string, string][] = [
+    ['tracking', sim.world ? 'preview' : trackingLost ? 'LOST' : 'ok'],
+    ['depth', sim.world ? 'simulated' : depthEnabled ? `${depthPoints} pts` : 'not available'],
+    ['rays', sim.world ? 'simulated' : `${rayHits}/${groundRays.rays} hit`],
+    ['map', `${map.size} cells, step ${map.walkableStep.toFixed(2)} m`],
+    ['buddy', `${partner.state}, ${(partner.s - runnerS).toFixed(1)} m ahead, seen to +${(path.status.seenUntilS - runnerS).toFixed(1)} m`],
+  ];
+  if (routeRun) {
+    const pairs = routeRun.aligner.pairCounts();
+    const fit = routeRun.aligner.stats;
+    rows.push(
+      ['gps', sim.world ? 'simulated, ±4 m noise' : fix ? `±${Math.round(fix.accuracy)} m, ${Math.max(0, Date.now() / 1000 - fix.time).toFixed(0)} s old` : (gps.error ?? 'waiting')],
+      ['compass', sim.world ? 'simulated, 20° off' : heading === null ? 'stale / none' : `${Math.round((heading * 180) / Math.PI)}° true`],
+      ['fit', `${pairs.gps} gps + ${pairs.route} route pairs, ${fit.refits} refits`],
+      ['last fit', `moved ${fit.lastShift.toFixed(1)} m, turned ${fit.lastTurnDeg.toFixed(1)}°`],
+      ['off path', `${Math.hypot(onPath.x - runner.x, onPath.z - runner.z).toFixed(1)} m at ${runnerS.toFixed(0)} m`],
+    );
+  }
+  return rows;
+}
+
 const clock = new THREE.Clock();
 const point = new THREE.Vector3();
 const tangent = new THREE.Vector3();
@@ -616,7 +646,7 @@ renderer.setAnimationLoop((time, frame) => {
       reticle.visible = !!pose;
       if (pose) reticle.matrix.fromArray(pose.transform.matrix);
     }
-    if (placed) groundRays.sample(frame, referenceSpace, map);
+    if (placed) rayHits = groundRays.sample(frame, referenceSpace, map);
   }
 
   if (placed && mode) {
@@ -631,7 +661,7 @@ renderer.setAnimationLoop((time, frame) => {
     } else {
       runner.setFromMatrixPosition(renderer.xr.getCamera().matrixWorld);
       runnerS = path.project(runner);
-      if (sensorTick && frame && referenceSpace && depthEnabled) depthSensor.sample(frame, referenceSpace, map, now);
+      if (sensorTick && frame && referenceSpace && depthEnabled) depthPoints = depthSensor.sample(frame, referenceSpace, map, now);
     }
 
     path.update(dt, seconds, runnerS, map, now, sensorTick);
@@ -689,6 +719,7 @@ renderer.setAnimationLoop((time, frame) => {
     const breakLabel = partner.breaking ? "Let's go" : 'Take a break';
     if (hud.breakButton.textContent !== breakLabel) hud.breakButton.textContent = breakLabel;
     bubble.update(point, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera, now);
+    if (diagnostics.due(now)) diagnostics.show(diagnosticRows(runnerS, trackingLost));
   }
 
   // Nothing 3D to show on the home, planner or summary screens.

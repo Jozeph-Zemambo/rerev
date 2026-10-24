@@ -33,13 +33,21 @@ export class GroundRays {
     }
   }
 
-  sample(frame: XRFrame, referenceSpace: XRReferenceSpace, map: SurfaceMap) {
+  /** Returns how many rays hit the ground this frame. */
+  sample(frame: XRFrame, referenceSpace: XRReferenceSpace, map: SurfaceMap): number {
+    let hits = 0;
     for (const source of this.sources) {
       const pose = frame.getHitTestResults(source)[0]?.getPose(referenceSpace);
       if (!pose) continue;
       const { x, y, z } = pose.transform.position;
       map.addGroundSample(x, y, z, 2, map.groundTolerance(0.1));
+      hits++;
     }
+    return hits;
+  }
+
+  get rays() {
+    return this.sources.length;
   }
 
   stop() {

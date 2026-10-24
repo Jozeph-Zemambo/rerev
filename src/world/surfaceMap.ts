@@ -77,6 +77,10 @@ export class SurfaceMap {
     this.cells.clear();
   }
 
+  get size() {
+    return this.cells.size;
+  }
+
   /** Forget cells far from a point, so a long run doesn't keep growing memory. */
   prune(x: number, z: number, radius: number) {
     const r = Math.ceil(radius / CELL_SIZE);

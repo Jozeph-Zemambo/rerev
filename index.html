@@ -93,13 +93,14 @@
       <div id="topbar">
         <button id="hr-stat" class="stat" type="button" aria-label="Heart rate. Tap for a demo override."><span class="k">Heart</span><span id="hr" class="v">--</span><span id="hr-source" class="u">bpm</span></button>
         <div class="stat"><span class="k">Pace</span><span id="pace-live" class="v">--</span><span class="u">min/km</span></div>
-        <div class="stat"><span class="k">Buddy</span><span id="lead" class="v">--</span><span class="u">m ahead</span></div>
+        <button id="lead-stat" class="stat" type="button" aria-label="Buddy distance ahead. Long press for diagnostics."><span class="k">Buddy</span><span id="lead" class="v">--</span><span class="u">m ahead</span></button>
       </div>
       <div id="hr-panel" hidden>
         <label for="hr-manual">Demo heart rate <output id="hr-manual-out" for="hr-manual">140</output> bpm</label>
         <input id="hr-manual" type="range" min="60" max="200" step="1" value="140" />
         <button id="hr-auto" type="button">Back to watch</button>
       </div>
+      <pre id="diag" hidden></pre>
       <div id="turn" hidden><span id="turn-arrow" class="turn-arrow">↑</span><span id="turn-text"></span></div>
       <div id="bottom">
         <div id="score" aria-live="polite"><span class="star">★ <b id="score-stars">0</b></span><span class="coin">● <b id="score-coins">0</b></span></div>

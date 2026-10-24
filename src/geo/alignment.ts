@@ -50,7 +50,15 @@ export function arBearing(dx: number, dz: number): number {
  */
 export class GeoAligner {
   transform: GeoTransform | null = null;
+  /** For diagnostics: how many refits, and how far the last one moved the route. */
+  readonly stats = { refits: 0, lastShift: 0, lastTurnDeg: 0 };
   private pairs: Pair[] = [];
+
+  /** For diagnostics: pairs in the current window, by kind. */
+  pairCounts() {
+    const route = this.pairs.filter(pair => pair.kind === 'route').length;
+    return { gps: this.pairs.length - route, route };
+  }
 
   /**
    * @param fix where the phone is, in map metres
@@ -63,6 +71,7 @@ export class GeoAligner {
     const placed = apply({ theta, tx: 0, tz: 0 }, fix);
     this.transform = { theta, tx: ar.x - placed.x, tz: ar.z - placed.z };
     this.pairs = [];
+    Object.assign(this.stats, { refits: 0, lastShift: 0, lastTurnDeg: 0 });
   }
 
   /** Record where GPS says you are and where AR tracking says you are, at the same moment. */
@@ -80,9 +89,15 @@ export class GeoAligner {
     if (usable.length < 4 || spread(usable) < (usable === this.pairs ? MIN_SPREAD : MIN_ROUTE_SPREAD)) return false;
     const fit = fitRigid(usable);
     const t = this.transform;
-    t.theta = wrap(t.theta + wrap(fit.theta - t.theta) * BLEND);
-    t.tx += (fit.tx - t.tx) * BLEND;
-    t.tz += (fit.tz - t.tz) * BLEND;
+    const turn = wrap(fit.theta - t.theta) * BLEND;
+    const shiftX = (fit.tx - t.tx) * BLEND;
+    const shiftZ = (fit.tz - t.tz) * BLEND;
+    t.theta = wrap(t.theta + turn);
+    t.tx += shiftX;
+    t.tz += shiftZ;
+    this.stats.refits++;
+    this.stats.lastShift = Math.hypot(shiftX, shiftZ);
+    this.stats.lastTurnDeg = (turn * 180) / Math.PI;
     return true;
   }
 
