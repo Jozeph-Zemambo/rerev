@@ -1,0 +1,65 @@
+import type { ConvexClient } from 'convex/browser';
+import { api } from '../../convex/_generated/api';
+import { formatSecondsPerKm } from '../hud';
+import type { RunSummary } from '../run/recorder';
+
+const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+export function formatDistance(metres: number) {
+  return metres >= 1000 ? `${(metres / 1000).toFixed(2)} km` : `${Math.round(metres)} m`;
+}
+
+export function formatDuration(seconds: number) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** The end-of-run card. */
+export class SummaryScreen {
+  onDone: () => void = () => {};
+  private readonly screen = byId('summary');
+
+  constructor() {
+    byId('summary-done').onclick = () => {
+      this.screen.hidden = true;
+      this.onDone();
+    };
+  }
+
+  show(summary: RunSummary) {
+    const set = (id: string, text: string) => (byId(id).textContent = text);
+    set('summary-title', summary.distance < 30 ? 'Good warm-up!' : summary.breaks === 0 ? 'Nonstop. Nice!' : 'Nice run!');
+    set('sum-distance', formatDistance(summary.distance));
+    set('sum-time', formatDuration(summary.duration));
+    set('sum-pace', summary.distance > 20 ? `${formatSecondsPerKm((summary.duration / summary.distance) * 1000)} /km` : '–');
+    set('sum-avg-hr', summary.avgHr ? `${Math.round(summary.avgHr)}` : '–');
+    set('sum-max-hr', summary.maxHr ? `${Math.round(summary.maxHr)}` : '–');
+    set('sum-breaks', String(summary.breaks));
+    set('sum-stars', String(summary.stars));
+    set('sum-coins', String(summary.coins));
+    this.screen.hidden = false;
+  }
+}
+
+/** Recent runs on the home screen, live from Convex. */
+export function showRecentRuns(client: ConvexClient | null) {
+  if (!client) return;
+  const box = byId('recent');
+  const list = byId('recent-list');
+  client.onUpdate(api.runs.recent, {}, runs => {
+    box.hidden = runs.length === 0;
+    list.replaceChildren(
+      ...runs.slice(0, 4).map(run => {
+        const li = document.createElement('li');
+        const when = new Date(run.startedAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+        const what = document.createElement('strong');
+        what.textContent = `${formatDistance(run.summary.distance)} · ${formatDuration(run.summary.duration)}`;
+        const meta = document.createElement('span');
+        meta.textContent = `${when} · ★ ${run.summary.stars}`;
+        li.append(what, meta);
+        return li;
+      }),
+    );
+  });
+}

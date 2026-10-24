@@ -1,4 +1,4 @@
-import { ConvexClient } from 'convex/browser';
+import type { ConvexClient } from 'convex/browser';
 import { api } from '../../convex/_generated/api';
 
 /** A watch reading older than this means the watch has gone quiet. */
@@ -14,13 +14,13 @@ export class HeartRateFeed {
   manual: number | null = null;
   private watch: { bpm: number; at: number } | null = null;
   private simulated: number | null = null;
-  private client: ConvexClient | null = null;
+  private connected = false;
   private spikeUntil = 0;
 
-  connect(convexUrl: string | undefined) {
-    if (this.client || !convexUrl) return;
-    this.client = new ConvexClient(convexUrl);
-    this.client.onUpdate(api.heartRate.latest, { device: 'watch' }, reading => {
+  connect(client: ConvexClient | null) {
+    if (this.connected || !client) return;
+    this.connected = true;
+    client.onUpdate(api.heartRate.latest, { device: 'watch' }, reading => {
       this.watch = reading;
     });
   }

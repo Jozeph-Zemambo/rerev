@@ -2,6 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { DepthSensor } from './ar/depthSensor';
 import { GroundRays } from './ar/groundRays';
+import { convex } from './convexClient';
 import { apply, arBearing } from './geo/alignment';
 import { Compass, Gps, type Fix } from './geo/sensors';
 import { HeartRateFeed } from './heart/heartRateFeed';
@@ -9,10 +10,12 @@ import { Hud } from './hud';
 import { Coach, type CoachLine } from './partner/coach';
 import { Mascot } from './partner/mascot';
 import { Partner, type PartnerState } from './partner/partner';
+import { RunRecorder } from './run/recorder';
 import { RouteRun } from './run/routeRun';
 import { PreviewWorld } from './sim/previewWorld';
 import { Planner, type RunGoal } from './ui/planner';
 import { SpeechBubble } from './ui/speechBubble';
+import { showRecentRuns, SummaryScreen } from './ui/summary';
 import { BrowserVoice } from './ui/voice';
 import { HazardMarkers } from './world/hazardMarkers';
 import { demoRoute, Path, type RoutePoint } from './world/path';
@@ -37,7 +40,13 @@ const gps = new Gps();
 const compass = new Compass();
 const planner = new Planner(gps);
 const heart = new HeartRateFeed();
-heart.connect(import.meta.env.VITE_CONVEX_URL as string | undefined);
+heart.connect(convex);
+const recorder = new RunRecorder(convex);
+const summaryScreen = new SummaryScreen();
+summaryScreen.onDone = () => {
+  homeScreen.hidden = false;
+};
+showRecentRuns(convex);
 const coach = new Coach();
 const voice = new BrowserVoice();
 const bubble = new SpeechBubble(hud.root);
@@ -176,6 +185,7 @@ async function finishRun() {
 }
 
 function endRun() {
+  const summary = placed ? recorder.finish(performance.now() / 1000) : null;
   placed = false;
   mode = null;
   routeRun = null;
@@ -195,7 +205,12 @@ function endRun() {
   if ('speechSynthesis' in window) speechSynthesis.cancel();
   hud.showTurn(null);
   hud.showControls(false);
+  hud.hrPanel.hidden = true;
   showRunUi(false);
+  if (summary) {
+    homeScreen.hidden = true;
+    summaryScreen.show(summary);
+  }
 }
 
 // ---------------------------------------------------------------- runs
@@ -208,6 +223,12 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   partner.effort = 1;
   runStartedAt = performance.now() / 1000;
   coach.reset(runStartedAt);
+  recorder.start(runStartedAt, {
+    kind: mode?.kind ?? 'quick',
+    goalPaceSecPerKm: 1000 / partner.goalPace,
+    zone: coach.zone,
+    routeDistance: routeRun?.route.distance,
+  });
   lastState = null;
   wasDetouring = false;
   mascot.root.visible = true;
@@ -493,6 +514,7 @@ renderer.setAnimationLoop((time, frame) => {
     if (line) speak(line, line.mood === 'care');
     partner.effort = coach.effort;
     partner.update(dt, runnerS);
+    recorder.update(now, runnerS, heart.bpm, partner.breaking);
     announce();
 
     path.pointAt(partner.s, point);
@@ -511,7 +533,7 @@ renderer.setAnimationLoop((time, frame) => {
       heartRate: heart.bpm,
       heartSource: heart.source,
       zone: coach.zone,
-      paceMetersPerSecond: partner.currentSpeed,
+      paceMetersPerSecond: recorder.pace,
       leadMeters: Math.max(0, partner.s - runnerS),
     });
     hud.say(stateMessage(partner.state));

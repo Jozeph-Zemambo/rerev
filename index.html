@@ -24,6 +24,28 @@
           <span class="card-title">Quick start here</span>
           <span class="card-sub">A short path right in front of you</span>
         </button>
+        <div id="recent" hidden>
+          <h3>Recent runs</h3>
+          <ul id="recent-list"></ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="summary" class="screen" hidden>
+      <div class="home-inner">
+        <p class="eyebrow">Run complete</p>
+        <h1 id="summary-title" class="summary-title">Nice run!</h1>
+        <dl class="summary-grid">
+          <div><dt>Distance</dt><dd id="sum-distance">–</dd></div>
+          <div><dt>Time</dt><dd id="sum-time">–</dd></div>
+          <div><dt>Avg pace</dt><dd id="sum-pace">–</dd></div>
+          <div><dt>Avg heart</dt><dd id="sum-avg-hr">–</dd></div>
+          <div><dt>Max heart</dt><dd id="sum-max-hr">–</dd></div>
+          <div><dt>Breathers</dt><dd id="sum-breaks">–</dd></div>
+          <div class="gold"><dt>Stars</dt><dd id="sum-stars">–</dd></div>
+          <div class="gold"><dt>Coins</dt><dd id="sum-coins">–</dd></div>
+        </dl>
+        <button id="summary-done" class="big-button" type="button">Back home</button>
       </div>
     </section>
 
