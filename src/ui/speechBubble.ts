@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import type { CoachLine } from '../partner/coach';
+import type { Mood } from '../voice/lines';
+
+export type BubbleLine = { text: string; mood: Mood };
 
 /** How high above the buddy's feet the bubble's tail points. */
 const HEAD_HEIGHT = 1.15;
@@ -24,7 +26,7 @@ export class SpeechBubble {
     parent.appendChild(this.el);
   }
 
-  show(line: CoachLine, now: number) {
+  show(line: BubbleLine, now: number) {
     this.text.textContent = line.text;
     this.el.dataset.mood = line.mood;
     this.el.hidden = false;

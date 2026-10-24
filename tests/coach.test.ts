@@ -17,9 +17,25 @@ function setup() {
 
 test('a heart rate well above the zone brings an automatic breather', () => {
   const { coach, partner } = setup();
-  for (let t = 0; t < 40 && !partner.breaking; t += 0.5) coach.update(t, 185, partner);
+  let said = null;
+  for (let t = 0; t < 40 && !partner.breaking; t += 0.5) said = coach.update(t, 185, partner) ?? said;
   assert.ok(partner.breaking);
   assert.ok(coach.autoBreak);
+  // The voice line is fixed; the bubble shows the actual heart rate.
+  assert.equal(said?.id, 'coach_breather_auto');
+  assert.match(said?.bubble ?? '', /Heart at 185/);
+});
+
+test('losing the heart rate mid-run is mentioned once', () => {
+  const { coach, partner } = setup();
+  const said: string[] = [];
+  let t = 0;
+  for (; t < 5; t += 0.5) coach.update(t, 140, partner);
+  for (const end = t + 60; t < end; t += 0.5) {
+    const line = coach.update(t, null, partner);
+    if (line) said.push(line.id);
+  }
+  assert.deepEqual(said, ['coach_heart_lost']);
 });
 
 test('after "let\'s go" there is no instant second breather', () => {

@@ -1,7 +1,9 @@
+import { ENCOURAGEMENT, PUSH, type Spoken } from '../voice/lines';
 import type { Partner } from './partner';
 
 export type Zone = { low: number; high: number };
-export type CoachLine = { text: string; mood: 'cheer' | 'care' | 'info' };
+/** What the coach wants said: a line from the catalog, plus specifics for the bubble. */
+export type CoachLine = Spoken;
 
 /** Keeps zone edges from flickering when heart rate hovers right on them. */
 const HYSTERESIS = 3;
@@ -22,14 +24,8 @@ const MIN_GAP = 6;
 const RESUME_GRACE = 30;
 /** If heart rate disappears during an automatic breather (watch dropped), give up waiting after this. */
 const NO_HEART_RESUME = 60;
-
-const ENCOURAGEMENT = [
-  'Nice rhythm. Right in the zone!',
-  "You're cruising. Love it.",
-  'Breathe easy, you are doing great.',
-  'Steady and strong. Keep it up!',
-  "This pace looks good on you.",
-];
+/** Heart rate gone this long mid-run (after having had one): say so, once. */
+const NO_HEART_WARN = 15;
 
 type Band = 'below' | 'in' | 'above';
 
@@ -57,6 +53,9 @@ export class Coach {
   private lastEncourage = 0;
   private eased = false;
   private encourageIndex = 0;
+  private pushIndex = 0;
+  private hadHeart = false;
+  private warnedNoHeart = false;
   private graceUntil = 0;
   private noHeartSince: number | null = null;
 
@@ -70,6 +69,8 @@ export class Coach {
   }
 
   reset(now: number) {
+    this.hadHeart = false;
+    this.warnedNoHeart = false;
     this.graceUntil = 0;
     this.noHeartSince = null;
     this.effort = 1;
@@ -91,11 +92,17 @@ export class Coach {
       if (this.autoBreak && partner.breaking && now - this.noHeartSince >= NO_HEART_RESUME) {
         this.resume(now);
         partner.setBreak(false);
-        return this.say(now, { text: "Lost your heart rate, but you've rested a while. Let's go!", mood: 'cheer' }, true);
+        return this.say(now, { id: 'coach_resume_no_heart' }, true);
+      }
+      if (this.hadHeart && !this.warnedNoHeart && !partner.breaking && now - this.noHeartSince >= NO_HEART_WARN) {
+        this.warnedNoHeart = true;
+        return this.say(now, { id: 'coach_heart_lost' });
       }
       return null;
     }
     this.noHeartSince = null;
+    this.hadHeart = true;
+    this.warnedNoHeart = false;
     this.updateBand(now, bpm);
     const inBand = now - this.bandSince;
 
@@ -111,7 +118,7 @@ export class Coach {
           this.eased = true;
           this.effort = 0.9;
           partner.setBreak(false);
-          return this.say(now, { text: "Heart rate's back down. Ready? Let's go!", mood: 'cheer' }, true);
+          return this.say(now, { id: 'coach_resume_recovered', bubble: `Heart rate's back down to ${Math.round(bpm)}. Ready? Let's go!` }, true);
         }
       } else {
         this.recoveringSince = null;
@@ -135,12 +142,12 @@ export class Coach {
         this.autoBreak = true;
         this.recoveringSince = null;
         partner.setBreak(true);
-        return this.say(now, { text: "Your heart's working hard. Let's take a breather and jog on the spot.", mood: 'care' }, true);
+        return this.say(now, { id: 'coach_breather_auto', bubble: `Heart at ${Math.round(bpm)}. Let's take a breather and jog on the spot.` }, true);
       }
       if (inBand >= EASE_AFTER && !this.eased) {
         this.eased = true;
         this.effort = 0.85;
-        return this.say(now, { text: "You're above your zone. Let's ease off a little.", mood: 'care' }, true);
+        return this.say(now, { id: 'coach_ease_off', bubble: `Heart at ${Math.round(bpm)}, above your ${this.zone.low}–${this.zone.high} zone. Let's ease off a little.` }, true);
       }
       return null;
     }
@@ -149,7 +156,7 @@ export class Coach {
       if (inBand >= PUSH_AFTER && now - this.lastPush >= PUSH_COOLDOWN && partner.state === 'run') {
         this.lastPush = now;
         this.effort = Math.min(1.12, this.effort + 0.06);
-        return this.say(now, { text: "You've got more in you. Let's pick it up!", mood: 'cheer' });
+        return this.say(now, { id: PUSH[this.pushIndex++ % PUSH.length] });
       }
       return null;
     }
@@ -161,8 +168,7 @@ export class Coach {
     }
     if (now - this.lastEncourage >= ENCOURAGE_EVERY && partner.state === 'run') {
       this.lastEncourage = now;
-      const text = ENCOURAGEMENT[this.encourageIndex++ % ENCOURAGEMENT.length];
-      return this.say(now, { text, mood: 'cheer' });
+      return this.say(now, { id: ENCOURAGEMENT[this.encourageIndex++ % ENCOURAGEMENT.length] });
     }
     return null;
   }

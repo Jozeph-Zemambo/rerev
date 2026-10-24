@@ -1,39 +1,40 @@
 'use node';
 
 import Anthropic from '@anthropic-ai/sdk';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { v } from 'convex/values';
-import { z } from 'zod';
+import { ACTIONS, DECISION_LINE_IDS, decisionMenu, decisionSchema, parseDecision } from '../src/voice/decisions';
+import { lineById } from '../src/voice/lines';
 import { action, env } from './_generated/server';
 
-const INTENTS = ['break', 'go', 'faster', 'slower', 'status', 'finish', 'chat'] as const;
+const FORMAT = { type: 'json_schema', schema: decisionSchema() } as const;
 
-const Reply = z.object({
-  intent: z.enum(INTENTS),
-  reply: z.string(),
-});
+const SYSTEM = `You decide what Buddy does. Buddy is a cheerful cartoon running partner in an AR running app. The runner said something mid-run that keyword matching didn't understand. Pick one action and one line id from that action's list. You never write words: each line is pre-recorded.
 
-const SYSTEM = `You are Buddy, a cheerful cartoon running partner inside an AR running app. The runner just said something out loud mid-run that simple keyword matching didn't understand.
+- Soft statements ("I'm tired", "my legs are dying") mean ask_break, not break. Use break only for a clear request to stop or rest.
+- Grumbles about effort or the route ("man, this is steep") are none with an encouraging line.
+- confirm_yes or confirm_no only when a question is pending and they answered it.
+- Chest pain, dizziness, feeling faint or unwell: break with cmd_break_unwell.
+- Questions about distance, pace, time or heart rate: status.
+- Small talk, jokes, anything unclear: none.
 
-Decide what they want and answer in character:
-- intent "break": they want to stop or rest.
-- intent "go": they want to start moving again.
-- intent "faster" / "slower": change the pace.
-- intent "status": they're asking how they're doing.
-- intent "finish": they want to end the run.
-- intent "chat": anything else (small talk, a question, encouragement).
+Actions and their lines:
+${decisionMenu()}`;
 
-"reply" is what Buddy says back: one or two short, warm sentences (under 25 words) that suit being heard while running. Use the run details given. Never give medical advice beyond suggesting they slow down or rest; if they mention chest pain, dizziness or feeling faint, use intent "break" and tell them to stop and get help.`;
+const QUESTIONS = { break: lineById('confirm_ask_break').text } as const;
 
 /**
- * Free-form voice commands, interpreted by Claude Haiku. Only used when the on-phone keyword
- * matcher doesn't recognise a phrase, and only if ANTHROPIC_API_KEY is set on the deployment
- * (`npx convex env set ANTHROPIC_API_KEY ...`). Returns null when unavailable.
+ * Free-form voice commands, decided by Claude Haiku: an action plus one of the pre-recorded
+ * lines allowed for it. Only used for what the on-phone keyword rules don't settle, and only
+ * if ANTHROPIC_API_KEY is set on the deployment (`npx convex env set ANTHROPIC_API_KEY ...`).
+ * Returns null when unavailable, and the phone falls back to its own guess or "didn't catch that".
  */
 export const interpret = action({
   args: {
     said: v.string(),
+    /** The question the buddy is waiting on an answer to, if any. */
+    pending: v.optional(v.literal('break')),
     run: v.object({
+      state: v.string(),
       bpm: v.optional(v.number()),
       zoneLow: v.number(),
       zoneHigh: v.number(),
@@ -45,26 +46,44 @@ export const interpret = action({
   returns: v.union(
     v.null(),
     v.object({
-      intent: v.union(...INTENTS.map(intent => v.literal(intent))),
-      reply: v.string(),
+      action: v.union(...ACTIONS.map(name => v.literal(name))),
+      lineId: v.union(...DECISION_LINE_IDS.map(id => v.literal(id))),
     }),
   ),
   handler: async (_ctx, args) => {
     if (!env.ANTHROPIC_API_KEY) return null;
-    const said = args.said.slice(0, 300);
-    const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+    const said = args.said.slice(0, 300).replace(/"/g, "'");
+    const { run } = args;
+    const zone = run.bpm === undefined ? 'unknown' : run.bpm > run.zoneHigh ? 'above' : run.bpm < run.zoneLow ? 'below' : 'in';
+    const pace = run.paceSecondsPerKm
+      ? `${Math.floor(run.paceSecondsPerKm / 60)}:${String(Math.round(run.paceSecondsPerKm % 60)).padStart(2, '0')}/km`
+      : 'unknown';
+    const context = [
+      `Buddy: ${run.state}${run.onBreak ? ' (on a break)' : ''}`,
+      `Heart rate: ${run.bpm === undefined ? 'unknown' : Math.round(run.bpm)}, zone ${run.zoneLow}-${run.zoneHigh} (${zone})`,
+      `Pace: ${pace}, ${Math.round(run.metres)} m so far`,
+      `Pending question: ${args.pending ? `"${QUESTIONS[args.pending]}"` : 'none'}`,
+      `Runner said: "${said}"`,
+    ].join('\n');
+
+    // A runner won't wait long for an answer: fail fast and let the phone fall back.
+    const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, timeout: 8000, maxRetries: 1 });
     try {
-      const response = await client.messages.parse({
+      const response = await client.messages.create({
         model: 'claude-haiku-5-5',
-        max_tokens: 400,
+        max_tokens: 128,
         system: SYSTEM,
-        output_config: { effort: 'low', format: zodOutputFormat(Reply) },
-        messages: [{ role: 'user', content: `Run details: ${JSON.stringify(args.run)}\nThe runner said: "${said}"` }],
+        // A small pick from a menu: no thinking keeps it fast and the output to ~25 tokens.
+        thinking: { type: 'disabled' },
+        output_config: { effort: 'low', format: FORMAT },
+        messages: [{ role: 'user', content: context }],
       });
-      if (response.stop_reason === 'refusal' || !response.parsed_output) return null;
-      return response.parsed_output;
+      if (response.stop_reason !== 'end_turn') return null;
+      const text = response.content.find(block => block.type === 'text');
+      return text ? parseDecision(text.text, args.pending ?? null) : null;
     } catch (error) {
-      console.error('Buddy could not reach Claude', error);
+      if (error instanceof Anthropic.APIError) console.error(`Buddy could not reach Claude (${error.status})`, error.message);
+      else console.error('Buddy could not reach Claude', error);
       return null;
     }
   },

@@ -1,4 +1,4 @@
-/** Tiny synthesized pickup sounds, so there are no audio files to ship. */
+/** Tiny synthesized pickup sounds, so there are no audio files to ship. Also owns the app's AudioContext. */
 export class Sounds {
   private context: AudioContext | null = null;
 
@@ -6,6 +6,11 @@ export class Sounds {
   unlock() {
     this.context ??= new AudioContext();
     void this.context.resume();
+  }
+
+  /** The shared AudioContext once a tap has created it (the buddy's voice clips play on it too). */
+  get audio(): AudioContext | null {
+    return this.context;
   }
 
   star() {

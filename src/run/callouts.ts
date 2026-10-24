@@ -1,6 +1,6 @@
-import type { CoachLine } from '../partner/coach';
 import type { TurnStep } from '../geo/routing';
 import { formatSecondsPerKm } from '../hud';
+import { kmLineId, lapLineId, type LineId, type Spoken } from '../voice/lines';
 
 /** Call a turn when it is about this far ahead. */
 const TURN_CALL = 30;
@@ -9,11 +9,11 @@ const TURN_LATE = 4;
 /** Splits and halfway only make sense on runs at least this long. */
 const LONG_RUN = 800;
 const FINAL_STRETCH = 100;
-const LAP_CHEERS = ["That's lap {n}!", 'Lap {n} done. Looking good!', 'Lap {n}! Keep that rhythm.', "Lap {n}. You're flying!"];
 
 /**
  * What the buddy says about the route itself: turns coming up, kilometre splits with your pace,
- * halfway, and the final stretch. Each is said once per run.
+ * halfway, and the final stretch. Each is said once per run. The voice says a fixed line
+ * ("Left turn coming up!"); the bubble carries the street, distance or split time.
  */
 export class RouteCallouts {
   private steps: TurnStep[] = [];
@@ -45,7 +45,7 @@ export class RouteCallouts {
    * `runnerS` is how far along the route the runner is; `travelled` the distance they have run.
    * Time spent on a breather doesn't count towards the kilometre split.
    */
-  update(now: number, runnerS: number, travelled: number, breaking: boolean): CoachLine | null {
+  update(now: number, runnerS: number, travelled: number, breaking: boolean): Spoken | null {
     if (breaking) this.lastSplitAt += now - this.lastUpdate;
     this.lastUpdate = now;
     for (let i = 0; i < this.steps.length; i++) {
@@ -59,49 +59,66 @@ export class RouteCallouts {
       }
       if (ahead > TURN_CALL) break;
       this.called.add(i);
+      const id = turnLineId(step);
       const turn = turnWords(step);
-      if (!turn) continue;
+      if (!id || !turn) continue;
+      const inMetres = ` in ${Math.max(5, Math.round(ahead / 5) * 5)} m`;
       // A second turn right after this one goes in the same breath, not as a confusing early call.
       const next = this.steps[i + 1];
       const then = next && next.fromStart - step.fromStart < TURN_CALL ? turnWords(next) : null;
       if (then) {
         this.called.add(i + 1);
-        return { text: `${turn}, then ${then.charAt(0).toLowerCase()}${then.slice(1)}.`, mood: 'info' };
+        return { id: 'turn_double', bubble: `${turn}${inMetres}, then ${then.charAt(0).toLowerCase()}${then.slice(1)}.` };
       }
-      return { text: turnPhrase(step)!, mood: 'info' };
+      return { id, bubble: `${turn}${inMetres}` };
     }
 
     if (this.lapLength > 0 && travelled >= this.nextLap * this.lapLength) {
       const lap = this.nextLap++;
-      return { text: LAP_CHEERS[(lap - 1) % LAP_CHEERS.length].replace('{n}', String(lap)), mood: 'cheer' };
+      return { id: lapLineId(lap), bubble: `Lap ${lap} done!` };
     }
 
     if (travelled >= this.nextKm * 1000) {
       const split = now - this.lastSplitAt;
       this.lastSplitAt = now;
       const km = this.nextKm++;
-      return { text: `${km} ${km === 1 ? 'kilometre' : 'kilometres'} done! That one took ${formatSecondsPerKm(split)}.`, mood: 'cheer' };
+      return { id: kmLineId(km), bubble: `${km} km done in ${formatSecondsPerKm(split)}` };
     }
 
     if (this.distance < LONG_RUN) return null;
     if (!this.saidHalfway && runnerS >= this.distance / 2) {
       this.saidHalfway = true;
-      return { text: "Halfway there! You're doing great.", mood: 'cheer' };
+      return { id: 'route_halfway', bubble: `Halfway there! ${formatKm(this.distance - runnerS)} to go.` };
     }
     if (!this.saidFinal && this.distance - runnerS <= FINAL_STRETCH) {
       this.saidFinal = true;
-      return { text: 'Last hundred metres. Finish strong!', mood: 'cheer' };
+      return { id: 'route_final_stretch' };
     }
     return null;
   }
 }
 
-/** "Left onto Elbow Drive coming up!", or null for steps that aren't really turns. */
-export function turnPhrase(step: TurnStep): string | null {
-  const words = turnWords(step);
-  if (!words) return null;
-  if (step.modifier === 'uturn') return `${words} up here.`;
-  return step.modifier === 'left' || step.modifier === 'right' ? `${words} coming up!` : `${words} up ahead.`;
+/** The voice line for a turn ("Left turn coming up!"), or null for steps that aren't really turns. */
+export function turnLineId(step: TurnStep): LineId | null {
+  if (step.type === 'depart' || step.type === 'arrive') return null;
+  switch (step.modifier) {
+    case 'left':
+      return 'turn_left';
+    case 'right':
+      return 'turn_right';
+    case 'slight left':
+      return 'turn_slight_left';
+    case 'slight right':
+      return 'turn_slight_right';
+    case 'sharp left':
+      return 'turn_sharp_left';
+    case 'sharp right':
+      return 'turn_sharp_right';
+    case 'uturn':
+      return 'turn_uturn';
+    default:
+      return null;
+  }
 }
 
 /** The turn itself: "Left onto Elbow Drive", "Bear right", "Turn around". */
@@ -118,4 +135,8 @@ function turnWords(step: TurnStep): string | null {
 
 function capitalise(text: string) {
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function formatKm(metres: number) {
+  return metres >= 1000 ? `${(metres / 1000).toFixed(1)} km` : `${Math.round(metres / 10) * 10} m`;
 }

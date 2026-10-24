@@ -9,7 +9,7 @@ import { Compass, Gps, type Fix } from './geo/sensors';
 import { BluetoothHeartRate, type BluetoothState } from './heart/bluetoothHeartRate';
 import { HeartRateFeed } from './heart/heartRateFeed';
 import { formatPace, Hud } from './hud';
-import { Coach, type CoachLine } from './partner/coach';
+import { Coach } from './partner/coach';
 import { Mascot } from './partner/mascot';
 import { Partner, type PartnerState } from './partner/partner';
 import { RouteCallouts } from './run/callouts';
@@ -20,8 +20,12 @@ import { Planner, type RunGoal } from './ui/planner';
 import { SpeechBubble } from './ui/speechBubble';
 import { showRecentRuns, SummaryScreen } from './ui/summary';
 import { Diagnostics } from './ui/diagnostics';
-import { BrowserVoice } from './ui/voice';
-import { VoiceCommands, type Intent } from './ui/voiceCommands';
+import { LineVoice } from './ui/voice';
+import { VoiceCommands } from './ui/voiceCommands';
+import { PendingQuestion, routeTranscript } from './voice/conversation';
+import type { Action, Decision, DecisionLineId } from './voice/decisions';
+import { bubbleText, COIN_QUIPS, IDLE_BREAK, IDLE_WAIT, lineById, RUN_STARTS, type LineId, type Spoken } from './voice/lines';
+import type { QueueOptions } from './voice/speechQueue';
 import { formatDistance } from './ui/summary';
 import { Sounds } from './ui/sounds';
 import { Collectibles } from './world/collectibles';
@@ -40,6 +44,12 @@ const QUICK_PACE = 1.6;
 const SENSOR_INTERVAL = 0.1;
 /** Don't announce detours more often than this. */
 const DETOUR_CALL_GAP = 30;
+/** Waiting (or on a breather) this long before the buddy chats, then at most this often. */
+const IDLE_AFTER = 8;
+const IDLE_GAP = 25;
+/** Tracking lost this long before the buddy says so, then at most this often. */
+const TRACKING_LOST_AFTER = 2;
+const TRACKING_CALL_GAP = 30;
 /** Outdoors, stepping off a kerb to cross the road is normal, not a hazard. */
 const KERB = 0.2;
 /** Preview-only: how wrong the simulated compass is, and how noisy simulated GPS is. */
@@ -91,7 +101,9 @@ summaryScreen.onDone = () => {
 showRecentRuns(convex);
 const coach = new Coach();
 const callouts = new RouteCallouts();
-const voice = new BrowserVoice();
+const sounds = new Sounds();
+const voice = new LineVoice(() => sounds.audio);
+const question = new PendingQuestion();
 const bubble = new SpeechBubble(hud.root);
 const DEFAULT_ZONE = { low: 130, high: 160 };
 
@@ -131,9 +143,9 @@ scene.add(shadow);
 const partner = new Partner(path);
 const collectibles = new Collectibles();
 scene.add(collectibles.group);
-const sounds = new Sounds();
-const COIN_QUIPS = ['Cha-ching!', 'Shiny!', 'Ooh, a coin!', 'Treasure!'];
 let quip = 0;
+let starts = 0;
+let idleLine = 0;
 const depthSensor = new DepthSensor();
 const groundRays = new GroundRays();
 const diagnostics = new Diagnostics(byId('lead-stat'));
@@ -153,6 +165,10 @@ let lastPrune = 0;
 let lastState: PartnerState | null = null;
 let wasDetouring = false;
 let lastDetourCall = -Infinity;
+let stateSince = 0;
+let lastIdleCall = -Infinity;
+let trackingLostSince: number | null = null;
+let lastTrackingCall = -Infinity;
 
 /** Desktop preview state (no AR): a simulated world, runner, GPS and compass. */
 const sim = {
@@ -166,6 +182,13 @@ const sim = {
 };
 
 // ---------------------------------------------------------------- screens
+
+// Audio may only start from a tap; the first one anywhere unlocks it so voice clips can decode early.
+addEventListener('pointerdown', unlockAudio, { once: true });
+function unlockAudio() {
+  sounds.unlock();
+  voice.prepare();
+}
 
 byId('go-plan').onclick = () => {
   askForMicrophone();
@@ -222,20 +245,34 @@ commands.onState = (listening, error) => {
   talkButton.querySelector('span')!.textContent = listening ? 'Listening…' : 'Talk';
   if (error) hud.say(error);
 };
-commands.onHeard = (transcript, intent) => {
+commands.onHeard = transcript => {
   hud.say(`You said: "${transcript}"`);
   messageHoldUntil = performance.now() / 1000 + 3;
-  if (intent === 'unknown' && convex) void askClaude(transcript);
-  else respond(intent);
+  hear(transcript);
 };
 
-/** Phrases the keyword rules don't know go to Claude Haiku (via Convex), if a key is set. */
-async function askClaude(said: string) {
+/**
+ * Clear commands and yes/no answers are handled on the phone, instantly. Anything softer or
+ * unknown goes to Claude (via Convex) to pick an action and a line; without Convex or an API
+ * key, soft phrases get a local guess and the rest "didn't catch that".
+ */
+function hear(transcript: string) {
+  const route = routeTranscript(transcript, question.current(performance.now() / 1000));
+  if (route.kind === 'answer') return respond(route.answer === 'yes' ? 'confirm_yes' : 'confirm_no');
+  if (route.kind === 'intent') return respond(route.intent);
+  if (convex) void askClaude(transcript, route.fallback);
+  else if (route.fallback) respond(route.fallback.action, route.fallback.lineId);
+  else respond('unknown');
+}
+
+async function askClaude(said: string, fallback: Decision | null) {
   bubble.show({ text: 'Hmm…', mood: 'info' }, performance.now() / 1000);
   const result = await convex!
     .action(api.buddy.interpret, {
       said,
+      pending: question.current(performance.now() / 1000) ?? undefined,
       run: {
+        state: partner.state,
         bpm: heart.bpm ?? undefined,
         zoneLow: coach.zone.low,
         zoneHigh: coach.zone.high,
@@ -246,52 +283,70 @@ async function askClaude(said: string) {
     })
     .catch(() => null);
   if (!placed) return;
-  if (!result) return respond('unknown');
-  if (result.intent === 'chat') return speak({ text: result.reply, mood: 'cheer' });
-  respond(result.intent, result.reply);
+  if (result) respond(result.action, result.lineId);
+  else if (fallback) respond(fallback.action, fallback.lineId);
+  else respond('unknown');
 }
 
-/** What the buddy does when you talk to it. `reply` replaces its usual line (Claude's wording). */
-function respond(intent: Intent | 'chat', reply?: string) {
-  const say = (text: string, mood: CoachLine['mood'], interrupt = false) => speak({ text: reply ?? text, mood }, interrupt);
-  switch (intent) {
-    case 'chat':
-      return say("I'm all ears. Let's keep moving!", 'cheer');
+/** What the buddy does when you talk to it. `lineId` picks which of the action's lines to say. */
+function respond(action: Action | 'unknown', lineId?: DecisionLineId) {
+  const now = performance.now() / 1000;
+  const pending = question.current(now);
+  // Any real answer closes the question; small talk and "didn't catch that" leave it open.
+  if (action !== 'none' && action !== 'unknown') question.clear();
+  const line = (fallback: LineId): LineId => lineId ?? fallback;
+  switch (action) {
+    case 'none':
+      return speak({ id: line('chat_ack') });
+    case 'ask_break':
+      if (partner.breaking) return speak({ id: 'idle_break_1' });
+      question.ask('break', now);
+      return speak({ id: line('confirm_ask_break') }, { interrupt: true });
+    case 'confirm_yes':
+      if (pending !== 'break') return speak({ id: 'chat_ack' });
+      takeBreak();
+      return speak({ id: 'confirm_yes_break' }, { interrupt: true });
+    case 'confirm_no':
+      return speak({ id: 'confirm_no' });
     case 'break':
-      partner.setBreak(true);
-      coach.autoBreak = false;
-      return say('Sure, breather time. Jog on the spot with me.', 'care', true);
+      takeBreak();
+      return speak({ id: line('cmd_break') }, { interrupt: true });
     case 'go':
-      if (!partner.breaking) return say("I'm right here. Let's keep it up!", 'cheer');
+      if (!partner.breaking) return speak({ id: 'cmd_go_already' });
       partner.setBreak(false);
-      coach.resume(performance.now() / 1000);
-      return say("Alright, let's go!", 'cheer', true);
+      coach.resume(now);
+      return speak({ id: line('cmd_go') }, { interrupt: true });
     case 'faster':
       partner.nudgePace(0.3);
-      return say('Picking it up!', 'cheer');
+      return speak({ id: line('cmd_faster') });
     case 'slower':
       partner.nudgePace(-0.3);
-      return say('Easing off. Nice and steady.', 'care');
+      return speak({ id: line('cmd_slower') });
     case 'status': {
       const bpm = heart.bpm;
       const parts = [`${formatDistance(recorder.distanceSoFar)} so far`];
-      if (recorder.pace > 0.3) parts.push(`${formatPace(recorder.pace).replace(':', ' ')} pace`);
+      if (recorder.pace > 0.3) parts.push(`${formatPace(recorder.pace)}/km pace`);
       if (bpm) parts.push(`heart at ${Math.round(bpm)}`);
-      return say(`${parts.join(', ')}. You're doing great!`, 'info');
+      return speak({ id: 'cmd_status', bubble: `${parts.join(', ')}. You're doing great!` });
     }
     case 'finish':
-      say('Great run! Wrapping up.', 'cheer', true);
+      speak({ id: 'cmd_finish' }, { interrupt: true });
       setTimeout(() => void finishRun(), 1500);
       return;
     case 'unknown':
-      return say("Sorry, I didn't catch that. Try \"take a break\" or \"let's go\".", 'info');
+      return speak({ id: 'cmd_unknown', bubble: 'Sorry, I didn\'t catch that. Try "take a break" or "let\'s go".' });
   }
 }
 
-/** The buddy says something: speech bubble over its head plus the voice. */
-function speak(line: CoachLine, interrupt = false) {
-  bubble.show(line, performance.now() / 1000);
-  voice.speak(line.text, interrupt);
+function takeBreak() {
+  partner.setBreak(true);
+  coach.autoBreak = false;
+}
+
+/** The buddy says something: the line's voice, with the bubble showing its specifics. */
+function speak(spoken: Spoken, options: QueueOptions = {}) {
+  bubble.show({ text: bubbleText(spoken), mood: lineById(spoken.id).mood }, performance.now() / 1000);
+  voice.say(spoken.id, options);
 }
 hud.slowerButton.onclick = () => partner.nudgePace(-0.3);
 hud.fasterButton.onclick = () => partner.nudgePace(0.3);
@@ -314,7 +369,7 @@ async function startRun(next: RunMode) {
   partner.goalPace = next.kind === 'route' ? 1000 / next.goal.paceSecondsPerKm : QUICK_PACE;
   coach.zone = next.kind === 'route' ? next.goal.zone : DEFAULT_ZONE;
   heart.resetSimulation();
-  sounds.unlock();
+  unlockAudio();
   routeRun = next.kind === 'route' ? new RouteRun(next.goal.route) : null;
   // Sensor permissions must be requested from this tap.
   if (next.kind === 'route') {
@@ -352,7 +407,8 @@ function endRun() {
   }
   scene.background = null;
   bubble.hide();
-  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  voice.stop();
+  question.clear();
   hud.showTurn(null);
   hud.showControls(false);
   hud.hrPanel.hidden = true;
@@ -392,6 +448,12 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   lastState = null;
   wasDetouring = false;
   lastDetourCall = -Infinity;
+  stateSince = runStartedAt;
+  lastIdleCall = -Infinity;
+  trackingLostSince = null;
+  lastTrackingCall = -Infinity;
+  question.clear();
+  speak({ id: RUN_STARTS[starts++ % RUN_STARTS.length] }, { interrupt: true });
   mascot.root.visible = true;
   shadow.visible = true;
   reticle.visible = false;
@@ -638,26 +700,43 @@ function stateMessage(state: PartnerState): string {
   }
 }
 
-/** The buddy speaks up when its situation changes: something in the way, a drop, the finish. */
-function announce() {
+/**
+ * The buddy speaks up when its situation changes (something in the way, a drop, the finish),
+ * when it loses sight of the ground, and now and then while it stands waiting.
+ */
+function announce(now: number, trackingLost: boolean) {
   if (partner.state !== lastState) {
     if (partner.state === 'blocked') {
-      const drop = path.status.blockReason === 'drop';
-      speak({ text: drop ? "Careful! There's a drop ahead." : "Whoa, something's blocking the way.", mood: 'care' }, true);
+      speak({ id: path.status.blockReason === 'drop' ? 'hazard_drop' : 'hazard_blocked' }, { interrupt: true });
     } else if (partner.state === 'done') {
-      speak({ text: 'We made it! Great run.', mood: 'cheer' }, true);
+      speak({ id: 'run_finish', bubble: `We made it! ${formatDistance(recorder.distanceSoFar)}. Great run.` }, { interrupt: true });
     } else if (partner.state === 'stairs' && lastState !== 'wait') {
-      speak({ text: "Stairs ahead! Let's take them easy.", mood: 'care' }, true);
+      speak({ id: 'hazard_stairs' }, { interrupt: true });
     }
     lastState = partner.state;
+    stateSince = now;
   }
   // Once is enough: on a lap course the same bag comes round every lap.
-  const now = performance.now() / 1000;
   if (path.status.detouring && !wasDetouring && now - lastDetourCall > DETOUR_CALL_GAP) {
     lastDetourCall = now;
-    speak({ text: "Something's in the way. Follow me around it!", mood: 'info' });
+    speak({ id: 'hazard_detour' });
   }
   wasDetouring = path.status.detouring;
+
+  if (trackingLost) trackingLostSince ??= now;
+  else trackingLostSince = null;
+  if (trackingLostSince !== null && now - trackingLostSince >= TRACKING_LOST_AFTER && now - lastTrackingCall > TRACKING_CALL_GAP) {
+    lastTrackingCall = now;
+    speak({ id: 'run_tracking_lost' });
+  }
+
+  const waiting = partner.state === 'wait' || partner.state === 'break';
+  if (waiting && !voice.busy && now - stateSince >= IDLE_AFTER && now - lastIdleCall >= IDLE_GAP) {
+    lastIdleCall = now;
+    // "Say let's go" only fits a breather the runner chose; the coach ends its own.
+    const lines = partner.state === 'wait' ? IDLE_WAIT : IDLE_BREAK.filter(id => !coach.autoBreak || id !== 'idle_break_1');
+    speak({ id: lines[idleLine++ % lines.length] });
+  }
 }
 
 /** What the sensors are doing right now, for the on-phone diagnostics readout. */
@@ -734,13 +813,13 @@ renderer.setAnimationLoop((time, frame) => {
     // Heart rate → coach → buddy behaviour and what it says.
     if (sim.world) heart.simulate(dt, partner.currentSpeed, partner.breaking, now - runStartedAt);
     const line = coach.update(now, heart.bpm, partner);
-    if (line) speak(line, line.mood === 'care');
+    if (line) speak(line, { interrupt: lineById(line.id).mood === 'care' });
     const callout = callouts.update(now, runnerS, recorder.distanceSoFar, partner.breaking);
     if (callout) speak(callout);
     partner.effort = coach.effort;
     partner.update(dt, runnerS);
     recorder.update(now, runnerS, heart.bpm, partner.breaking);
-    announce();
+    announce(now, trackingLost);
 
     // Stars and coins: in AR the runner is the phone; in preview, the simulated runner on the path.
     const feet = sim.world ? path.pointAt(runnerS, new THREE.Vector3()) : runner;
@@ -751,7 +830,8 @@ renderer.setAnimationLoop((time, frame) => {
       } else {
         recorder.coins++;
         sounds.coin();
-        bubble.show({ text: COIN_QUIPS[quip++ % COIN_QUIPS.length], mood: 'cheer' }, now);
+        // The quip always pops up, but is only said out loud if the buddy isn't mid-sentence.
+        speak({ id: COIN_QUIPS[quip++ % COIN_QUIPS.length] }, { ifIdle: true });
       }
       hud.showScore(recorder.stars, recorder.coins);
     }
@@ -798,7 +878,7 @@ addEventListener('resize', () => {
 });
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { rerev: { path, partner, map, camera, sim, coach, heart, commands, recorder, getRouteRun: () => routeRun } });
+  Object.assign(window, { rerev: { path, partner, map, camera, sim, coach, heart, commands, recorder, voice, hear, getRouteRun: () => routeRun } });
 }
 
 void (async () => {
