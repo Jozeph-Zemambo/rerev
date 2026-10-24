@@ -11,14 +11,16 @@ const MAX_ACCURACY = 25;
 /** Show the next turn once it is this close. */
 const TURN_HORIZON = 150;
 /**
- * Routes are planned from where you stand, so at the start the route's first point is under
- * your feet. A first GPS fix this close to it is trusted less than that: the path starts at you.
+ * Routes are planned from where you stand, so the route's first point is usually under your
+ * feet. If the first fix lands within about twice its own accuracy of it, the path starts at
+ * you; further off (say you started in a park and the route begins on the road), the fix wins.
  */
-const SNAP_TO_START = 40;
+const SNAP_WITHIN_ACCURACIES = 2;
+const SNAP_MIN = 8;
 /**
- * Someone running the route is on it to within a metre or two, which beats GPS across the
- * route. Each fix also records "you are on the route where we think you are", trusted like a
- * 3 m fix: it straightens out compass error fast, while GPS still corrects along the route.
+ * Someone running the route is on it to within a metre or two across it, which beats GPS. Each
+ * fix also records how far to the side of the route the runner is (never how far along: that
+ * is GPS's job). It straightens out compass error within the first few metres.
  */
 const ROUTE_MATCH_ACCURACY = 3;
 /** Further than this from the route the runner has probably left it, so no snapping. */
@@ -53,9 +55,9 @@ export class RouteRun {
   }
 
   /** Anchor the route using one GPS fix plus the direction the camera faces. */
-  begin(fix: LatLon, ar: ArPoint, headingRad: number, arForwardBearing: number) {
+  begin(fix: LatLon & { accuracy: number }, ar: ArPoint, headingRad: number, arForwardBearing: number) {
     const at = this.frame.toEnu(fix);
-    const nearStart = Math.hypot(at.e, at.n) < SNAP_TO_START;
+    const nearStart = Math.hypot(at.e, at.n) <= Math.max(SNAP_MIN, SNAP_WITHIN_ACCURACIES * fix.accuracy);
     this.aligner.initialise(nearStart ? { e: 0, n: 0 } : at, ar, headingRad, arForwardBearing);
     this.fixes = 0;
   }
@@ -83,21 +85,21 @@ export class RouteRun {
   }
 
   private matchToRoute(runnerS: number, ar: ArPoint, time: number) {
-    const onRoute = this.enuAt(runnerS);
-    const shown = apply(this.aligner.transform!, onRoute);
+    const { point, along } = this.routeAt(runnerS);
+    const shown = apply(this.aligner.transform!, point);
     if (Math.hypot(shown.x - ar.x, shown.z - ar.z) > ROUTE_MATCH_RANGE) return;
-    this.aligner.addFix(onRoute, ar, ROUTE_MATCH_ACCURACY, time, 'route');
+    this.aligner.addRouteMatch(point, along, ar, ROUTE_MATCH_ACCURACY, time);
   }
 
-  /** Map position `s` metres along the route. */
-  private enuAt(s: number): Enu {
+  /** Map position `s` metres along the route, and the direction the route runs there. */
+  private routeAt(s: number): { point: Enu; along: Enu } {
     const L = this.lengths;
     let i = 1;
     while (i < L.length - 1 && L[i] < s) i++;
     const t = Math.min(1, Math.max(0, (s - L[i - 1]) / (L[i] - L[i - 1] || 1)));
     const a = this.enu[i - 1];
     const b = this.enu[i] ?? a;
-    return { e: a.e + (b.e - a.e) * t, n: a.n + (b.n - a.n) * t };
+    return { point: { e: a.e + (b.e - a.e) * t, n: a.n + (b.n - a.n) * t }, along: { e: b.e - a.e, n: b.n - a.n } };
   }
 
   /** The next turn ahead of `runnerS` metres along the route, if it is coming up soon. */

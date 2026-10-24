@@ -490,7 +490,7 @@ function startPreview() {
   const start = sim.truthPoints[0];
   const ahead = pointOnTruth(8);
   routeRun.begin(
-    routeRun.frame.toLatLon(noisy(enu[0])),
+    { ...routeRun.frame.toLatLon(noisy(enu[0])), accuracy: 5 },
     start,
     routeRun.startHeading() + SIM_COMPASS_ERROR,
     arBearing(ahead.x - start.x, ahead.z - start.z),

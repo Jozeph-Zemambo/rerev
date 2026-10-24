@@ -12,13 +12,19 @@ export type GeoTransform = { theta: number; tx: number; tz: number };
 
 export type ArPoint = { x: number; z: number };
 
-/** A map position matched to an AR position: from a GPS fix, or from "the runner is on the route here". */
-type Pair = { p: ArPoint; q: ArPoint; weight: number; time: number; kind: PairKind };
+/**
+ * A map position matched to an AR position. A GPS fix pins both directions. A route match
+ * ("the runner is on the route here") only says how far to the side of the route they are, so
+ * it carries the route's normal and pins that direction alone.
+ */
+type Pair = { p: ArPoint; q: ArPoint; weight: number; time: number; kind: PairKind; normal?: ArPoint };
 
 export type PairKind = 'gps' | 'route';
 
 /** Pairs older than this are dropped from the fit (AR tracking drifts slowly over time). */
 const PAIR_WINDOW = 180;
+/** Route matches only count for a short while: they describe the route as it was drawn then. */
+const ROUTE_PAIR_WINDOW = 10;
 /** Fit only once the GPS track spans this far, or heading errors swamp the fit. */
 const MIN_SPREAD = 20;
 /** Route matches carry no GPS noise, so they can settle the heading over a shorter stretch. */
@@ -26,6 +32,13 @@ const MIN_ROUTE_SPREAD = 8;
 /** Each refit moves the transform this fraction of the way, so the path glides instead of jumping. */
 const BLEND = 0.35;
 const MIN_ACCURACY = 3;
+/**
+ * The fit stays near the current transform in directions the pairs don't pin down (e.g. along
+ * a straight before GPS has spread out): as if the current one were a fix this many metres off,
+ * levered over this many metres for rotation.
+ */
+const PRIOR_ACCURACY = 10;
+const PRIOR_LEVER = 20;
 
 const base = (p: Enu): ArPoint => ({ x: p.e, z: -p.n });
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -75,19 +88,38 @@ export class GeoAligner {
   }
 
   /** Record where GPS says you are and where AR tracking says you are, at the same moment. */
-  addFix(fix: Enu, ar: ArPoint, accuracy: number, time: number, kind: PairKind = 'gps') {
-    const weight = 1 / Math.max(accuracy, MIN_ACCURACY) ** 2;
-    this.pairs.push({ p: base(fix), q: { ...ar }, weight, time, kind });
-    this.pairs = this.pairs.filter(pair => time - pair.time <= PAIR_WINDOW);
+  addFix(fix: Enu, ar: ArPoint, accuracy: number, time: number) {
+    this.add({ p: base(fix), q: { ...ar }, weight: 1 / Math.max(accuracy, MIN_ACCURACY) ** 2, time, kind: 'gps' });
+  }
+
+  /**
+   * Record that the runner, at `ar`, is on the route at map point `onRoute`, where the route
+   * runs in map direction `along`. Only the sideways offset counts.
+   */
+  addRouteMatch(onRoute: Enu, along: Enu, ar: ArPoint, accuracy: number, time: number) {
+    const length = Math.hypot(along.e, along.n) || 1;
+    // Route direction in base coordinates is (e, -n); its normal is (n, e).
+    const normal = { x: along.n / length, z: along.e / length };
+    this.add({ p: base(onRoute), q: { ...ar }, weight: 1 / Math.max(accuracy, MIN_ACCURACY) ** 2, time, kind: 'route', normal });
+  }
+
+  private add(pair: Pair) {
+    this.pairs.push(pair);
+    this.pairs = this.pairs.filter(old => pair.time - old.time <= (old.kind === 'route' ? ROUTE_PAIR_WINDOW : PAIR_WINDOW));
   }
 
   /** Re-fit the transform from recent pairs. Returns true if it moved. */
   refit(): boolean {
     if (!this.transform) return false;
-    // With enough GPS spread fit everything; before that, route matches alone can fix the heading.
-    const usable = spread(this.pairs) >= MIN_SPREAD ? this.pairs : this.pairs.filter(pair => pair.kind === 'route');
-    if (usable.length < 4 || spread(usable) < (usable === this.pairs ? MIN_SPREAD : MIN_ROUTE_SPREAD)) return false;
-    const fit = fitRigid(usable);
+    // Once GPS has spread out it is the judge. Before that, route matches alone can fix the
+    // compass heading. They're left out afterwards: if the runner follows the drawn line (an open
+    // plaza) rather than the real street, they would vote for whatever is drawn, and
+    // scripts/align-bench.ts shows them then doing more harm than good.
+    const gps = this.pairs.filter(pair => pair.kind === 'gps');
+    const route = this.pairs.filter(pair => pair.kind === 'route');
+    const usable = spread(gps) >= MIN_SPREAD ? gps : spread(route) >= MIN_ROUTE_SPREAD ? route : null;
+    if (!usable || usable.length < 4) return false;
+    const fit = fitTransform(usable, this.transform);
     const t = this.transform;
     const turn = wrap(fit.theta - t.theta) * BLEND;
     const shiftX = (fit.tx - t.tx) * BLEND;
@@ -111,36 +143,59 @@ function spread(pairs: Pair[]): number {
   return max;
 }
 
-/** Weighted 2D best-fit rotation + translation taking each pair's p onto its q (Kabsch). */
-export function fitRigid(pairs: { p: ArPoint; q: ArPoint; weight: number }[]): GeoTransform {
-  let w = 0;
-  let px = 0;
-  let pz = 0;
-  let qx = 0;
-  let qz = 0;
-  for (const { p, q, weight } of pairs) {
-    w += weight;
-    px += p.x * weight;
-    pz += p.z * weight;
-    qx += q.x * weight;
-    qz += q.z * weight;
+/**
+ * Weighted least-squares transform: GPS pairs pull point to point, route matches only pull
+ * sideways to the route (point to line). Solved by a few Gauss-Newton steps from `from`, with a
+ * weak pull back towards `from` so directions nothing constrains stay put.
+ */
+export function fitTransform(pairs: Pair[], from: GeoTransform): GeoTransform {
+  let { theta, tx, tz } = from;
+  const priorShift = 1 / PRIOR_ACCURACY ** 2;
+  const priorTurn = priorShift * PRIOR_LEVER ** 2;
+  for (let step = 0; step < 4; step++) {
+    const c = Math.cos(theta);
+    const s = Math.sin(theta);
+    // Normal equations A·d = b for the update d = (dTheta, dTx, dTz).
+    const A = [
+      [priorTurn, 0, 0],
+      [0, priorShift, 0],
+      [0, 0, priorShift],
+    ];
+    const b = [-priorTurn * wrap(theta - from.theta), -priorShift * (tx - from.tx), -priorShift * (tz - from.tz)];
+    const row = (j0: number, j1: number, j2: number, residual: number, weight: number) => {
+      const J = [j0, j1, j2];
+      for (let i = 0; i < 3; i++) {
+        b[i] -= weight * J[i] * residual;
+        for (let k = 0; k < 3; k++) A[i][k] += weight * J[i] * J[k];
+      }
+    };
+    for (const { p, q, weight, normal } of pairs) {
+      // Rotated map point, and its derivative with respect to theta: (az, -ax).
+      const ax = c * p.x + s * p.z;
+      const az = -s * p.x + c * p.z;
+      const rx = ax + tx - q.x;
+      const rz = az + tz - q.z;
+      if (normal) {
+        const nx = c * normal.x + s * normal.z;
+        const nz = -s * normal.x + c * normal.z;
+        row(nx * az - nz * ax, nx, nz, nx * rx + nz * rz, weight);
+      } else {
+        row(az, 1, 0, rx, weight);
+        row(-ax, 0, 1, rz, weight);
+      }
+    }
+    const d = solve3(A, b);
+    theta += d[0];
+    tx += d[1];
+    tz += d[2];
   }
-  px /= w;
-  pz /= w;
-  qx /= w;
-  qz /= w;
-  let dot = 0;
-  let cross = 0;
-  for (const { p, q, weight } of pairs) {
-    const ax = p.x - px;
-    const az = p.z - pz;
-    const bx = q.x - qx;
-    const bz = q.z - qz;
-    dot += weight * (bx * ax + bz * az);
-    cross += weight * (bx * az - bz * ax);
-  }
-  const theta = Math.atan2(cross, dot);
-  const c = Math.cos(theta);
-  const s = Math.sin(theta);
-  return { theta, tx: qx - (c * px + s * pz), tz: qz - (-s * px + c * pz) };
+  return { theta: wrap(theta), tx, tz };
+}
+
+function solve3(A: number[][], b: number[]): number[] {
+  const det = (m: number[][]) =>
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+  const D = det(A);
+  if (Math.abs(D) < 1e-12) return [0, 0, 0];
+  return [0, 1, 2].map(col => det(A.map((r, i) => r.map((v, k) => (k === col ? b[i] : v)))) / D);
 }
