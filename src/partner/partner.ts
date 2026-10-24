@@ -22,6 +22,8 @@ export class Partner {
   state: PartnerState = 'run';
   /** Goal pace in metres per second. 1.6 suits an indoor demo; a real jog is ~2.8. */
   goalPace = 1.6;
+  /** Set by the coach from heart rate: below 1 eases off, above 1 pushes a little. */
+  effort = 1;
   targetLead = 2;
   maxLead = 4.5;
 
@@ -82,7 +84,7 @@ export class Partner {
     const hill = THREE.MathUtils.clamp(1 - grade * 3, 0.6, 1.1);
     // If you catch up, it picks up the pace a little so it stays your partner, not your shadow.
     const moving = this.state === 'run' || this.state === 'look';
-    const target = moving ? this.goalPace * hill * (lead < 1 ? 1.25 : 1) : 0;
+    const target = moving ? this.goalPace * this.effort * hill * (lead < 1 ? 1.25 : 1) : 0;
     this.speed += (target - this.speed) * Math.min(1, dt * 3);
     let next = this.s + this.speed * dt;
     if (blockedAt !== null) next = Math.min(next, Math.max(this.s, blockedAt - STOP_SHORT));
