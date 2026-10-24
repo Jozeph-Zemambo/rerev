@@ -37,6 +37,8 @@ const LAPS = 20;
 const QUICK_PACE = 1.6;
 /** Depth, hazard planning and markers run at ~10 Hz; drawing runs every frame. */
 const SENSOR_INTERVAL = 0.1;
+/** Don't announce detours more often than this. */
+const DETOUR_CALL_GAP = 30;
 /** Outdoors, stepping off a kerb to cross the road is normal, not a hazard. */
 const KERB = 0.2;
 /** Preview-only: how wrong the simulated compass is, and how noisy simulated GPS is. */
@@ -121,6 +123,7 @@ let messageHoldUntil = 0;
 let lastPrune = 0;
 let lastState: PartnerState | null = null;
 let wasDetouring = false;
+let lastDetourCall = -Infinity;
 
 /** Desktop preview state (no AR): a simulated world, runner, GPS and compass. */
 const sim = {
@@ -612,7 +615,12 @@ function announce() {
     }
     lastState = partner.state;
   }
-  if (path.status.detouring && !wasDetouring) speak({ text: "Something's in the way. Follow me around it!", mood: 'info' });
+  // Once is enough: on a lap course the same bag comes round every lap.
+  const now = performance.now() / 1000;
+  if (path.status.detouring && !wasDetouring && now - lastDetourCall > DETOUR_CALL_GAP) {
+    lastDetourCall = now;
+    speak({ text: "Something's in the way. Follow me around it!", mood: 'info' });
+  }
   wasDetouring = path.status.detouring;
 }
 
