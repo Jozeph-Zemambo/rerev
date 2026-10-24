@@ -93,8 +93,10 @@ export function drawHeartChart(host: HTMLElement, trace: readonly TracePoint[], 
     dot.setAttribute('visibility', 'visible');
     const pace = formatPace(nearest.pace);
     tip.textContent = `${clock(nearest.t)} · ${Math.round(nearest.hr!)} bpm${nearest.breaking ? ' · breather' : pace === '--' ? '' : ` · ${pace} /km`}`;
-    tip.style.left = `${Math.min(Math.max((px / W) * 100, 18), 82)}%`;
     tip.hidden = false;
+    // Keep the label inside the chart, whatever its width.
+    const half = tip.offsetWidth / 2 / box.width;
+    tip.style.left = `${Math.min(Math.max(px / W, half), 1 - half) * 100}%`;
   };
   const clear = () => {
     cross.setAttribute('visibility', 'hidden');

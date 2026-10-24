@@ -92,7 +92,7 @@ button:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
 .zone-hero span { font-weight: 700; color: var(--ink-soft); line-height: 1.25; }
 .zone-hero small { font-weight: 700; white-space: nowrap; }
 .hr-chart { position: relative; }
-.hr-chart-svg { display: block; width: 100%; height: auto; touch-action: none; overflow: visible; }
+.hr-chart-svg { display: block; width: 100%; height: auto; touch-action: pan-y; overflow: visible; }
 .hr-zone { fill: #2bb3a3; fill-opacity: 0.16; }
 .hr-break { fill: #ffb347; fill-opacity: 0.28; }
 .hr-grid { stroke: #2bb3a3; stroke-opacity: 0.45; stroke-width: 1; }
@@ -163,6 +163,7 @@ button:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
   flex-shrink: 0;
   box-shadow: 0 6px 0 #d4513d, 0 -14px 16px var(--paper);
 }
+.sheet #start-run:active { box-shadow: 0 2px 0 #d4513d, 0 -14px 16px var(--paper); }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--cream); padding: 4px; border-radius: 999px; }
 .segmented button { border: 0; border-radius: 999px; padding: 9px 10px; background: transparent; font-weight: 800; color: var(--ink-soft); }
 .segmented button[aria-pressed='true'] { background: var(--sun); color: var(--ink); }

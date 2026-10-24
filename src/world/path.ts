@@ -507,7 +507,8 @@ export const LAP_LENGTH = 2 * LAP.straight + 2 * Math.PI * LAP.radius;
 
 /**
  * `laps` laps of a small running-track oval: from `start` along `direction` for the straight,
- * a half circle to the left, back down the other straight, and a half circle home.
+ * a half circle to the left, back down the other straight, and a half circle home. It covers
+ * about 5.4 m × 2.4 m, reaching 1.2 m back behind `start`.
  */
 export function lapRoute(start: THREE.Vector3, direction: THREE.Vector3, laps: number): RoutePoint[] {
   const left = new THREE.Vector3().crossVectors(UP, direction).normalize();

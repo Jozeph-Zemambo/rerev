@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RouteCallouts } from '../src/run/callouts';
 import type { TurnStep } from '../src/geo/routing';
+import * as THREE from 'three';
+import { lapRoute, Path } from '../src/world/path';
 
 const at = { lat: 0, lon: 0 };
 const step = (fromStart: number, modifier: string, street = '', type = 'turn'): TurnStep => ({ at, type, modifier, street, fromStart });
@@ -46,6 +48,17 @@ test('the lap course calls each lap', () => {
     if (line) said.push(line.text);
   }
   assert.deepEqual(said, ["That's lap 1!", 'Lap 2 done. Looking good!']);
+});
+
+test('every lap of the 20-lap course is called, including the last', () => {
+  const path = new Path();
+  path.setRoute(lapRoute(new THREE.Vector3(), new THREE.Vector3(0, 0, -1), 20), 0);
+  const callouts = new RouteCallouts();
+  callouts.reset(0, [], 0, path.length / 20);
+  let laps = 0;
+  // Progress can't go past the end of the path, just as on the phone.
+  for (let s = 0; s <= path.length + 5; s += 0.25) if (callouts.update(s, Math.min(s, path.length), Math.min(s, path.length), false)) laps++;
+  assert.equal(laps, 20);
 });
 
 test('short runs get no splits or halfway', () => {

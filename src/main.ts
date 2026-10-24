@@ -352,7 +352,8 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   partner.trustGroundAhead = !!routeRun;
   runStartedAt = performance.now() / 1000;
   coach.reset(runStartedAt);
-  callouts.reset(runStartedAt, routeRun?.route.steps, routeRun?.route.distance, lapCourse ? LAP_LENGTH : 0);
+  // The drawn oval cuts its bends slightly, so laps are measured on the path itself.
+  callouts.reset(runStartedAt, routeRun?.route.steps, routeRun?.route.distance, lapCourse ? path.length / LAPS : 0);
   recorder.start(runStartedAt, {
     kind: mode?.kind ?? 'quick',
     goalPaceSecPerKm: 1000 / partner.goalPace,
@@ -361,6 +362,7 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   });
   lastState = null;
   wasDetouring = false;
+  lastDetourCall = -Infinity;
   mascot.root.visible = true;
   shadow.visible = true;
   reticle.visible = false;
@@ -374,7 +376,10 @@ function placeAt(start: THREE.Vector3, cameraMatrix: THREE.Matrix4) {
   const from = new THREE.Vector3().setFromMatrixPosition(cameraMatrix);
   const seeds = [start, new THREE.Vector3(from.x, start.y, from.z)];
   if (!routeRun) {
-    const direction = new THREE.Vector3(start.x - from.x, 0, start.z - from.z).normalize();
+    // Away from the phone; if the tap was straight below it, the way the camera faces.
+    const direction = new THREE.Vector3(start.x - from.x, 0, start.z - from.z);
+    if (direction.lengthSq() < 0.01) direction.set(0, 0, -1).transformDirection(cameraMatrix).setY(0);
+    direction.normalize();
     const points = mode?.kind === 'quick' && mode.laps ? lapRoute(start, direction, LAPS) : demoRoute(start, direction, QUICK_LENGTH);
     layRoute(points, start.y, seeds, 0);
     return;
@@ -416,14 +421,16 @@ async function startAr() {
     depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] },
     domOverlay: { root: hud.root },
   } as XRSessionInit;
+  let session: XRSession | null = null;
   try {
-    const session = await navigator.xr!.requestSession('immersive-ar', init);
+    session = await navigator.xr!.requestSession('immersive-ar', init);
     renderer.xr.setReferenceSpaceType('local');
     await renderer.xr.setSession(session);
   } catch (error) {
+    // Back to where the run was started from (the planner keeps its own GPS watch).
+    void session?.end().catch(() => {});
     mode = null;
     routeRun = null;
-    gps.stop();
     alert(`Couldn't start AR: ${(error as Error).message}`);
   }
 }
