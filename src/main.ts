@@ -108,6 +108,7 @@ let depthEnabled = false;
 let sensorClock = 0;
 let runStartedAt = 0;
 let messageHoldUntil = 0;
+let lastPrune = 0;
 let lastState: PartnerState | null = null;
 let wasDetouring = false;
 
@@ -660,6 +661,10 @@ renderer.setAnimationLoop((time, frame) => {
     shadow.position.set(point.x, point.y + 0.003, point.z);
 
     if (sensorTick) markers.update(map, runner, now);
+    if (now - lastPrune > 5) {
+      lastPrune = now;
+      map.prune(runner.x, runner.z, 40);
+    }
     hud.showTurn(routeRun ? routeRun.nextTurn(runnerS) : null);
     hud.update({
       heartRate: heart.bpm,
@@ -675,7 +680,8 @@ renderer.setAnimationLoop((time, frame) => {
     bubble.update(point, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera, now);
   }
 
-  renderer.render(scene, camera);
+  // Nothing 3D to show on the home, planner or summary screens.
+  if (!renderer.domElement.hidden || renderer.xr.isPresenting) renderer.render(scene, camera);
 });
 
 addEventListener('resize', () => {

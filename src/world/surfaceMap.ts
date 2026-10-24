@@ -64,6 +64,18 @@ export class SurfaceMap {
     this.cells.clear();
   }
 
+  /** Forget cells far from a point, so a long run doesn't keep growing memory. */
+  prune(x: number, z: number, radius: number) {
+    const r = Math.ceil(radius / CELL_SIZE);
+    const cx = cellIndex(x);
+    const cz = cellIndex(z);
+    for (const key of this.cells.keys()) {
+      const ix = Math.floor(key / 65536) - OFFSET;
+      const iz = (key % 65536) - OFFSET;
+      if (Math.abs(ix - cx) > r || Math.abs(iz - cz) > r) this.cells.delete(key);
+    }
+  }
+
   /** Mark a disc of floor as known ground, e.g. around the spot the user tapped to start. */
   seedGround(x: number, y: number, z: number, radius: number) {
     const r = Math.ceil(radius / CELL_SIZE);

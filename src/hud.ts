@@ -80,14 +80,20 @@ export class Hud {
     if (this.turnText.textContent !== text) this.turnText.textContent = text;
   }
 
+  /** Called every frame; only touches the DOM when something visible changed (cheap in AR overlays). */
   update(stats: HudStats) {
     const bpm = stats.heartRate;
-    this.hr.textContent = bpm ? String(Math.round(bpm)) : '--';
-    this.hr.dataset.band = !bpm ? '' : bpm > stats.zone.high ? 'above' : bpm < stats.zone.low ? 'below' : 'in';
-    this.hrSource.textContent = SOURCE_LABEL[stats.heartSource];
-    this.pace.textContent = formatPace(stats.paceMetersPerSecond);
-    this.lead.textContent = stats.leadMeters.toFixed(1);
+    setText(this.hr, bpm ? String(Math.round(bpm)) : '--');
+    const band = !bpm ? '' : bpm > stats.zone.high ? 'above' : bpm < stats.zone.low ? 'below' : 'in';
+    if (this.hr.dataset.band !== band) this.hr.dataset.band = band;
+    setText(this.hrSource, SOURCE_LABEL[stats.heartSource]);
+    setText(this.pace, formatPace(stats.paceMetersPerSecond));
+    setText(this.lead, stats.leadMeters.toFixed(1));
   }
+}
+
+function setText(el: HTMLElement, text: string) {
+  if (el.textContent !== text) el.textContent = text;
 }
 
 export function formatPace(metersPerSecond: number): string {
