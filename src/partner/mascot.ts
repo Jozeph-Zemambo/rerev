@@ -5,6 +5,8 @@ export type Gait = {
   speed: number;
   /** Jogging on the spot (waiting for you, or on a break). */
   inPlace: boolean;
+  /** Rise over run of the ground (positive = uphill). */
+  grade: number;
 };
 
 /**
@@ -77,7 +79,10 @@ export class Mascot {
     const moving = gait.inPlace || gait.speed > 0.15;
     const targetSwing = gait.inPlace ? 0.75 : THREE.MathUtils.clamp(gait.speed / 2.4, 0, 1);
     this.swing += ((moving ? targetSwing : 0) - this.swing) * Math.min(1, dt * 6);
-    this.lean += (THREE.MathUtils.clamp(gait.speed / 3, 0, 1) * 0.2 - this.lean) * Math.min(1, dt * 4);
+    // Leans into the run, more on uphills, back a touch on downhills.
+    const hillLean = THREE.MathUtils.clamp(gait.grade * 1.5, -0.15, 0.3);
+    const targetLean = THREE.MathUtils.clamp(gait.speed / 3, 0, 1) * 0.2 + (gait.inPlace ? 0 : hillLean);
+    this.lean += (targetLean - this.lean) * Math.min(1, dt * 4);
 
     const strideHz = gait.inPlace ? 2.6 : 1.1 + gait.speed * 0.55;
     this.phase += dt * Math.PI * 2 * strideHz;
