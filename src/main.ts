@@ -6,6 +6,7 @@ import { api } from '../convex/_generated/api';
 import { convex } from './convexClient';
 import { apply, arBearing } from './geo/alignment';
 import { Compass, Gps, type Fix } from './geo/sensors';
+import { BluetoothHeartRate, type BluetoothState } from './heart/bluetoothHeartRate';
 import { HeartRateFeed } from './heart/heartRateFeed';
 import { formatPace, Hud } from './hud';
 import { Coach, type CoachLine } from './partner/coach';
@@ -54,6 +55,34 @@ const compass = new Compass();
 const planner = new Planner(gps);
 const heart = new HeartRateFeed();
 heart.connect(convex);
+
+// Watch over Bluetooth: pair once from the home screen (Chrome needs a tap, and its chooser
+// can't show over AR); after that it reconnects by itself.
+const watch = new BluetoothHeartRate();
+const watchButton = byId<HTMLButtonElement>('watch-connect');
+const WATCH_LABEL: Record<BluetoothState, string> = {
+  off: 'Connect your watch',
+  connecting: 'Connecting to your watch…',
+  connected: 'Watch connected',
+  lost: 'Watch out of reach, retrying…',
+};
+watch.onReading = bpm => {
+  heart.reportWatch(bpm);
+  if (watch.state === 'connected') watchButton.lastElementChild!.textContent = `${watch.deviceName} · ${bpm} bpm`;
+};
+watch.onState = state => {
+  watchButton.dataset.state = state;
+  watchButton.lastElementChild!.textContent = WATCH_LABEL[state];
+};
+watchButton.hidden = !watch.supported;
+watchButton.onclick = () => {
+  if (watch.state === 'connected') return;
+  watch.pair().catch((error: Error) => {
+    // Closing the chooser isn't an error worth showing.
+    if (error.name !== 'NotFoundError') alert(`Couldn't connect to the watch: ${error.message}`);
+  });
+};
+void watch.resume();
 const recorder = new RunRecorder(convex);
 const summaryScreen = new SummaryScreen();
 summaryScreen.onDone = () => {

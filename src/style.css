@@ -62,6 +62,22 @@ button:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
   transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 150ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 .card-button:active { transform: translateY(4px); box-shadow: 0 2px 0 #e08e22; }
+.watch-pill {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font: 800 14px var(--body);
+}
+.watch-dot { width: 9px; height: 9px; border-radius: 50%; background: #c9b8a6; }
+.watch-pill[data-state='connected'] .watch-dot { background: var(--teal); }
+.watch-pill[data-state='connecting'] .watch-dot,
+.watch-pill[data-state='lost'] .watch-dot { background: var(--sun); }
 .card-button.alt { background: var(--paper); box-shadow: 0 6px 0 var(--line); }
 .card-button.alt:active { box-shadow: 0 2px 0 var(--line); }
 .card-title { font-family: var(--display); font-weight: 800; font-size: 26px; }

@@ -7,8 +7,10 @@ const STALE_MS = 8000;
 export type HeartSource = 'watch' | 'manual' | 'simulated' | 'none';
 
 /**
- * Where the buddy gets your heart rate: the watch (relayed through Convex), a manual value for
- * demos, or a simple simulation when previewing on a laptop. Manual beats watch beats simulation.
+ * Where the buddy gets your heart rate: the watch (straight over Bluetooth, or relayed through
+ * Convex by the laptop bridge), a manual value for demos, or a simple simulation when previewing
+ * on a laptop. Manual beats watch beats simulation; between the two watch routes, the latest
+ * reading wins.
  */
 export class HeartRateFeed {
   manual: number | null = null;
@@ -21,8 +23,13 @@ export class HeartRateFeed {
     if (this.connected || !client) return;
     this.connected = true;
     client.onUpdate(api.heartRate.latest, { device: 'watch' }, reading => {
-      this.watch = reading;
+      if (reading && (!this.watch || reading.at > this.watch.at)) this.watch = reading;
     });
+  }
+
+  /** A reading that came straight from the watch (Bluetooth). */
+  reportWatch(bpm: number) {
+    this.watch = { bpm, at: Date.now() };
   }
 
   get source(): HeartSource {
