@@ -11,6 +11,7 @@ import { formatPace, Hud } from './hud';
 import { Coach, type CoachLine } from './partner/coach';
 import { Mascot } from './partner/mascot';
 import { Partner, type PartnerState } from './partner/partner';
+import { RouteCallouts } from './run/callouts';
 import { RunRecorder } from './run/recorder';
 import { RouteRun } from './run/routeRun';
 import { PreviewWorld } from './sim/previewWorld';
@@ -53,6 +54,7 @@ summaryScreen.onDone = () => {
 };
 showRecentRuns(convex);
 const coach = new Coach();
+const callouts = new RouteCallouts();
 const voice = new BrowserVoice();
 const bubble = new SpeechBubble(hud.root);
 const DEFAULT_ZONE = { low: 130, high: 160 };
@@ -331,6 +333,7 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   partner.trustGroundAhead = !!routeRun;
   runStartedAt = performance.now() / 1000;
   coach.reset(runStartedAt);
+  callouts.reset(runStartedAt, routeRun?.route.steps, routeRun?.route.distance);
   recorder.start(runStartedAt, {
     kind: mode?.kind ?? 'quick',
     goalPaceSecPerKm: 1000 / partner.goalPace,
@@ -634,6 +637,8 @@ renderer.setAnimationLoop((time, frame) => {
     if (sim.world) heart.simulate(dt, partner.currentSpeed, partner.breaking, now - runStartedAt);
     const line = coach.update(now, heart.bpm, partner);
     if (line) speak(line, line.mood === 'care');
+    const callout = callouts.update(now, runnerS, recorder.distanceSoFar);
+    if (callout) speak(callout);
     partner.effort = coach.effort;
     partner.update(dt, runnerS);
     recorder.update(now, runnerS, heart.bpm, partner.breaking);
