@@ -27,14 +27,16 @@ export class PreviewWorld {
   private readonly down = new THREE.Vector3();
   private readonly hits: THREE.Intersection[] = [];
 
-  constructor() {
+  /** `withObstacles` adds the ramp, crate and barrier; map-route previews use a bare floor. */
+  constructor(withObstacles = true, size = 80) {
     const ground = new THREE.MeshStandardMaterial({ color: 0x3c5a48, roughness: 0.95 });
     const wood = new THREE.MeshStandardMaterial({ color: 0xb5793d, roughness: 0.8 });
     const concrete = new THREE.MeshStandardMaterial({ color: 0x8c8a84, roughness: 0.9 });
 
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80).rotateX(-Math.PI / 2), ground);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2), ground);
     this.add(floor);
-    this.group.add(new THREE.GridHelper(80, 80, 0x557a63, 0x4a6a56));
+    this.group.add(new THREE.GridHelper(size, size / 2, 0x557a63, 0x4a6a56));
+    if (!withObstacles) return;
 
     // Ramp up 0.45 m over 4 m, a 3 m plateau, then down over 4 m, on the long straight.
     const rampShape = new THREE.Shape();

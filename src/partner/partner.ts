@@ -45,8 +45,8 @@ export class Partner {
     return this.speed;
   }
 
-  reset() {
-    this.s = START_LEAD;
+  reset(runnerS = 0) {
+    this.s = runnerS + START_LEAD;
     this.state = 'run';
     this.speed = 0;
     this.onBreak = false;

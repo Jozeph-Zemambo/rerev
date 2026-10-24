@@ -1,33 +1,47 @@
 import './style.css';
 import * as THREE from 'three';
-import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { DepthSensor } from './ar/depthSensor';
 import { GroundRays } from './ar/groundRays';
+import { apply, arBearing } from './geo/alignment';
+import { Compass, Gps, type Fix } from './geo/sensors';
 import { Hud } from './hud';
 import { Mascot } from './partner/mascot';
 import { Partner, type PartnerState } from './partner/partner';
+import { RouteRun } from './run/routeRun';
 import { PreviewWorld } from './sim/previewWorld';
+import { Planner, type RunGoal } from './ui/planner';
 import { HazardMarkers } from './world/hazardMarkers';
 import { demoRoute, Path, type RoutePoint } from './world/path';
 import { createShadow } from './world/shadow';
 import { SurfaceMap } from './world/surfaceMap';
 
-const DEMO_LENGTH = 20;
-const PREVIEW_RUNNER_PACE = 1.3;
+type RunMode = { kind: 'quick' } | { kind: 'route'; goal: RunGoal };
+
+const QUICK_LENGTH = 20;
+const QUICK_PACE = 1.6;
 /** Depth, hazard planning and markers run at ~10 Hz; drawing runs every frame. */
 const SENSOR_INTERVAL = 0.1;
+/** Preview-only: how wrong the simulated compass is, and how noisy simulated GPS is. */
+const SIM_COMPASS_ERROR = (20 * Math.PI) / 180;
+const SIM_GPS_NOISE = 4;
+const SIM_TRUTH = { theta: 0.6, tx: 0, tz: 0 };
 
-const overlay = document.getElementById('overlay')!;
+const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const homeScreen = byId('home');
 const hud = new Hud();
+const gps = new Gps();
+const compass = new Compass();
+const planner = new Planner(gps);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.xr.enabled = true;
+renderer.domElement.hidden = true;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 200);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 400);
 scene.add(new THREE.HemisphereLight(0xfff4e0, 0x8899aa, 2.2));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6);
 sun.position.set(1, 3, 2);
@@ -53,16 +67,313 @@ const shadow = createShadow();
 shadow.visible = false;
 scene.add(shadow);
 const partner = new Partner(path);
-
 const depthSensor = new DepthSensor();
 const groundRays = new GroundRays();
-let previewWorld: PreviewWorld | null = null;
 
+let arSupported = false;
+let mode: RunMode | null = null;
+let routeRun: RouteRun | null = null;
 let placed = false;
-let previewRunnerS = 0;
 let hitTestSource: XRHitTestSource | null = null;
 let depthEnabled = false;
 let sensorClock = 0;
+
+/** Desktop preview state (no AR): a simulated world, runner, GPS and compass. */
+const sim = {
+  world: null as PreviewWorld | null,
+  runnerS: 0,
+  truthLine: null as THREE.Line | null,
+  truthPoints: [] as RoutePoint[],
+  truthLengths: [] as number[],
+  fixClock: 0,
+  seed: 11,
+};
+
+// ---------------------------------------------------------------- screens
+
+byId('go-plan').onclick = () => {
+  homeScreen.hidden = true;
+  planner.open();
+};
+byId('go-indoor').onclick = () => void startRun({ kind: 'quick' });
+planner.onBack = () => {
+  planner.close();
+  homeScreen.hidden = false;
+};
+planner.onStart = goal => void startRun({ kind: 'route', goal });
+
+hud.breakButton.onclick = () => {
+  partner.setBreak(!partner.breaking);
+  hud.breakButton.textContent = partner.breaking ? "Let's go" : 'Take a break';
+};
+hud.slowerButton.onclick = () => partner.nudgePace(-0.3);
+hud.fasterButton.onclick = () => partner.nudgePace(0.3);
+hud.finishButton.onclick = () => void finishRun();
+
+function showRunUi(running: boolean) {
+  document.body.classList.toggle('running', running);
+  renderer.domElement.hidden = !running;
+  hud.show(running);
+  if (running) {
+    homeScreen.hidden = true;
+    planner.close();
+  } else {
+    homeScreen.hidden = false;
+  }
+}
+
+async function startRun(next: RunMode) {
+  mode = next;
+  partner.goalPace = next.kind === 'route' ? 1000 / next.goal.paceSecondsPerKm : QUICK_PACE;
+  routeRun = next.kind === 'route' ? new RouteRun(next.goal.route) : null;
+  // Sensor permissions must be requested from this tap.
+  if (next.kind === 'route') {
+    gps.start();
+    void compass.start();
+  }
+  if (arSupported) await startAr();
+  else startPreview();
+}
+
+async function finishRun() {
+  const session = renderer.xr.getSession();
+  if (session) await session.end();
+  else endRun();
+}
+
+function endRun() {
+  placed = false;
+  mode = null;
+  routeRun = null;
+  mascot.root.visible = false;
+  shadow.visible = false;
+  markers.clear();
+  if (sim.world) {
+    scene.remove(sim.world.group);
+    sim.world = null;
+  }
+  if (sim.truthLine) {
+    scene.remove(sim.truthLine);
+    sim.truthLine = null;
+  }
+  scene.background = null;
+  hud.showTurn(null);
+  hud.showControls(false);
+  showRunUi(false);
+}
+
+// ---------------------------------------------------------------- runs
+
+function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], runnerS: number) {
+  map.reset();
+  for (const seed of seeds) map.seedGround(seed.x, floorY, seed.z, 1);
+  path.setRoute(points, floorY);
+  partner.reset(runnerS);
+  mascot.root.visible = true;
+  shadow.visible = true;
+  reticle.visible = false;
+  placed = true;
+  hud.showControls(true);
+  hud.breakButton.textContent = 'Take a break';
+}
+
+/** Tapped the floor in AR: lay the quick path, or anchor the map route to the world here. */
+function placeAt(start: THREE.Vector3, cameraMatrix: THREE.Matrix4) {
+  const from = new THREE.Vector3().setFromMatrixPosition(cameraMatrix);
+  const seeds = [start, new THREE.Vector3(from.x, start.y, from.z)];
+  if (!routeRun) {
+    const direction = new THREE.Vector3(start.x - from.x, 0, start.z - from.z).normalize();
+    layRoute(demoRoute(start, direction, QUICK_LENGTH), start.y, seeds, 0);
+    return;
+  }
+  const fix = gps.latest;
+  if (!fix || fix.accuracy > 30) {
+    hud.say(`Waiting for a GPS fix${fix ? ` (±${Math.round(fix.accuracy)} m so far)` : ''}. Step outside if you can, then tap again.`);
+    return;
+  }
+  const forward = new THREE.Vector3(0, 0, -1).transformDirection(cameraMatrix);
+  const heading = compass.heading ?? routeRun.startHeading();
+  routeRun.begin(fix, { x: from.x, z: from.z }, heading, arBearing(forward.x, forward.z));
+  layRoute(routeRun.arPoints(), start.y, seeds, 0);
+  partner.reset(path.project(from));
+}
+
+/** A GPS fix arrived: refine where the route sits in the world. */
+gps.onFix(fix => {
+  if (!placed || !routeRun || sim.world) return;
+  const pose = renderer.xr.getCamera().matrixWorld;
+  const at = new THREE.Vector3().setFromMatrixPosition(pose);
+  if (routeRun.addFix(fix, { x: at.x, z: at.z })) relayRoute();
+});
+
+/** Re-lay the route after the anchor moved. It is a rigid move, so distances along it still hold. */
+function relayRoute() {
+  if (!routeRun) return;
+  const floor = path.pointAt(partner.s, new THREE.Vector3()).y;
+  path.setRoute(routeRun.arPoints(), floor);
+}
+
+// ---------------------------------------------------------------- AR session
+
+async function startAr() {
+  // depthSensing is not in the WebXR typings yet but Chrome reads it.
+  const init = {
+    requiredFeatures: ['hit-test'],
+    optionalFeatures: ['dom-overlay', 'depth-sensing'],
+    depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] },
+    domOverlay: { root: hud.root },
+  } as XRSessionInit;
+  try {
+    const session = await navigator.xr!.requestSession('immersive-ar', init);
+    renderer.xr.setReferenceSpaceType('local');
+    await renderer.xr.setSession(session);
+  } catch (error) {
+    alert(`Couldn't start AR: ${(error as Error).message}`);
+  }
+}
+
+hud.root.addEventListener('beforexrselect', event => event.preventDefault());
+
+renderer.xr.addEventListener('sessionstart', async () => {
+  const session = renderer.xr.getSession()!;
+  depthEnabled = session.enabledFeatures?.includes('depth-sensing') ?? false;
+  const viewerSpace = await session.requestReferenceSpace('viewer');
+  hitTestSource = (await session.requestHitTestSource?.({ space: viewerSpace })) ?? null;
+  await groundRays.start(session);
+  placed = false;
+  showRunUi(true);
+  hud.showControls(false);
+  const where = routeRun ? 'Face the way your route starts, point at the ground and tap.' : 'Point at the floor. When the ring appears, tap to start.';
+  hud.say(depthEnabled ? where : `${where} (No depth camera on this phone, so obstacle detection is off.)`);
+});
+renderer.xr.addEventListener('sessionend', () => {
+  hitTestSource = null;
+  groundRays.stop();
+  endRun();
+});
+
+const controller = renderer.xr.getController(0);
+controller.addEventListener('select', () => {
+  if (placed || !reticle.visible) return;
+  placeAt(new THREE.Vector3().setFromMatrixPosition(reticle.matrix), renderer.xr.getCamera().matrixWorld);
+});
+scene.add(controller);
+
+// ---------------------------------------------------------------- desktop preview
+
+function startPreview() {
+  showRunUi(true);
+  scene.background = new THREE.Color(0x1d2b33);
+  sim.runnerS = 0;
+  sim.fixClock = 0;
+  if (!routeRun) {
+    sim.world = new PreviewWorld(true);
+    scene.add(sim.world.group);
+    layRoute(sim.world.route, 0, [new THREE.Vector3(0, 0, 0)], 0);
+    return;
+  }
+  // Map route: the "real" route sits at a hidden true transform; the app only learns it from
+  // a deliberately wrong compass and noisy GPS, exactly like on a phone.
+  const extent = routeRun.route.distance + 200;
+  sim.world = new PreviewWorld(false, Math.ceil(extent / 100) * 200);
+  scene.add(sim.world.group);
+  const enu = routeRun.route.points.map(p => routeRun!.frame.toEnu(p));
+  sim.truthPoints = enu.map(p => apply(SIM_TRUTH, p));
+  sim.truthLengths = cumulativeLengths(sim.truthPoints);
+  sim.truthLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(sim.truthPoints.map(p => new THREE.Vector3(p.x, 0.02, p.z))),
+    new THREE.LineBasicMaterial({ color: 0x9fe1cb, transparent: true, opacity: 0.5 }),
+  );
+  scene.add(sim.truthLine);
+  const start = sim.truthPoints[0];
+  const ahead = pointOnTruth(8);
+  routeRun.begin(
+    routeRun.frame.toLatLon(noisy(enu[0])),
+    start,
+    routeRun.startHeading() + SIM_COMPASS_ERROR,
+    arBearing(ahead.x - start.x, ahead.z - start.z),
+  );
+  layRoute(routeRun.arPoints(), 0, [new THREE.Vector3(start.x, 0, start.z)], 0);
+}
+
+function noisy(p: { e: number; n: number }) {
+  return { e: p.e + gauss() * SIM_GPS_NOISE, n: p.n + gauss() * SIM_GPS_NOISE };
+}
+
+function gauss() {
+  const r = () => (sim.seed = (sim.seed * 16807) % 2147483647) / 2147483647;
+  return Math.sqrt(-2 * Math.log(r())) * Math.cos(2 * Math.PI * r());
+}
+
+function cumulativeLengths(points: RoutePoint[]) {
+  const out = [0];
+  for (let i = 1; i < points.length; i++) out.push(out[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].z - points[i - 1].z));
+  return out;
+}
+
+function pointOnTruth(s: number): RoutePoint {
+  const L = sim.truthLengths;
+  const clamped = Math.min(Math.max(s, 0), L[L.length - 1]);
+  let i = 1;
+  while (i < L.length - 1 && L[i] < clamped) i++;
+  const t = (clamped - L[i - 1]) / (L[i] - L[i - 1] || 1);
+  const a = sim.truthPoints[i - 1];
+  const b = sim.truthPoints[i];
+  return { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t };
+}
+
+/** Moves the simulated runner and returns its distance along the displayed path. */
+function advanceSim(dt: number, now: number, sensorTick: boolean): number {
+  const world = sim.world!;
+  const stopped = partner.state === 'break' || partner.state === 'blocked' || partner.state === 'done';
+  const pace = (routeRun ? partner.goalPace : QUICK_PACE) * 0.85;
+
+  if (!routeRun) {
+    // Quick path: jog along the displayed (detoured) path, stopping behind the buddy when it stops.
+    let limit = stopped ? partner.s - 1.2 : path.length;
+    if (path.status.blockedAtS !== null) limit = Math.min(limit, path.status.blockedAtS - 0.6);
+    sim.runnerS = Math.min(limit, sim.runnerS + pace * dt);
+    const at = path.pointAt(sim.runnerS - 0.8, new THREE.Vector3());
+    camera.position.set(at.x, world.groundHeight(at.x, at.z) + 1.5, at.z);
+    const look = path.pointAt(sim.runnerS + 3, new THREE.Vector3());
+    camera.lookAt(look.x, look.y + 0.4, look.z);
+  } else {
+    // Map route: the runner follows the TRUE route; GPS reports it with noise once a second.
+    const lead = partner.s - path.project(camera.position);
+    if (!stopped || lead > 1.5) sim.runnerS = Math.min(sim.truthLengths.at(-1)!, sim.runnerS + pace * dt);
+    const at = pointOnTruth(sim.runnerS);
+    const look = pointOnTruth(sim.runnerS + 4);
+    camera.position.set(at.x, 1.5, at.z);
+    camera.lookAt(look.x, 0.4, look.z);
+    sim.fixClock += dt;
+    if (sim.fixClock >= 1) {
+      sim.fixClock = 0;
+      const enu = routeRun.frame.toEnu(routeRun.route.points[0]);
+      const truthEnu = inverseTruth(at);
+      const fix: Fix = { ...routeRun.frame.toLatLon(noisy({ e: truthEnu.e + enu.e, n: truthEnu.n + enu.n })), accuracy: 5, time: now };
+      if (routeRun.addFix(fix, at)) relayRoute();
+    }
+  }
+
+  if (sensorTick) {
+    world.sampleDepth(camera, map, now);
+    world.sampleGround(camera, map);
+  }
+  return routeRun ? path.project(camera.position) : sim.runnerS;
+}
+
+function inverseTruth(p: RoutePoint) {
+  const c = Math.cos(SIM_TRUTH.theta);
+  const s = Math.sin(SIM_TRUTH.theta);
+  const x = p.x - SIM_TRUTH.tx;
+  const z = p.z - SIM_TRUTH.tz;
+  // Undo the rotation, then base(): x = e, z = -n.
+  const bx = c * x - s * z;
+  const bz = s * x + c * z;
+  return { e: bx, n: -bz };
+}
+
+// ---------------------------------------------------------------- frame loop
 
 function stateMessage(state: PartnerState): string {
   switch (state) {
@@ -79,96 +390,14 @@ function stateMessage(state: PartnerState): string {
         ? "Careful, there's a drop ahead. Let's not go that way."
         : "Whoa, the way is blocked. I'll wait here.";
     case 'done':
-      return 'Path complete. Nice work!';
+      return 'Route complete. Nice work!';
   }
 }
-
-function startRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[]) {
-  map.reset();
-  for (const seed of seeds) map.seedGround(seed.x, floorY, seed.z, 1);
-  path.setRoute(points, floorY);
-  partner.reset();
-  previewRunnerS = 0;
-  mascot.root.visible = true;
-  shadow.visible = true;
-  reticle.visible = false;
-  placed = true;
-  hud.showControls(true);
-  hud.breakButton.textContent = 'Take a break';
-}
-
-function clearRoute() {
-  placed = false;
-  mascot.root.visible = false;
-  shadow.visible = false;
-  markers.clear();
-  hud.showControls(false);
-  hud.say('Point at the floor. When the ring appears, tap to start a path.');
-}
-
-function startPreview() {
-  previewWorld ??= new PreviewWorld();
-  if (!previewWorld.group.parent) scene.add(previewWorld.group);
-  scene.background = new THREE.Color(0x1d2b33);
-  startRoute(previewWorld.route, 0, [new THREE.Vector3(0, 0, 0)]);
-}
-
-hud.breakButton.onclick = () => {
-  partner.setBreak(!partner.breaking);
-  hud.breakButton.textContent = partner.breaking ? "Let's go" : 'Take a break';
-};
-hud.slowerButton.onclick = () => partner.nudgePace(-0.3);
-hud.fasterButton.onclick = () => partner.nudgePace(0.3);
-hud.resetButton.onclick = () => (previewWorld ? startPreview() : clearRoute());
-
-async function init() {
-  const arSupported = (await navigator.xr?.isSessionSupported('immersive-ar').catch(() => false)) ?? false;
-  if (!arSupported) {
-    startPreview();
-    return;
-  }
-  hud.say('Tap START AR, then point at the floor.');
-  // depthSensing is not in three's ARButton typings yet, but ARButton passes it straight to WebXR.
-  const sessionInit = {
-    requiredFeatures: ['hit-test'],
-    optionalFeatures: ['dom-overlay', 'depth-sensing'],
-    depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] },
-    domOverlay: { root: overlay },
-  };
-  document.body.appendChild(ARButton.createButton(renderer, sessionInit as unknown as Parameters<typeof ARButton.createButton>[1]));
-}
-
-overlay.addEventListener('beforexrselect', event => event.preventDefault());
-
-renderer.xr.addEventListener('sessionstart', async () => {
-  const session = renderer.xr.getSession()!;
-  depthEnabled = session.enabledFeatures?.includes('depth-sensing') ?? false;
-  const viewerSpace = await session.requestReferenceSpace('viewer');
-  hitTestSource = (await session.requestHitTestSource?.({ space: viewerSpace })) ?? null;
-  await groundRays.start(session);
-  clearRoute();
-  if (!depthEnabled) hud.say('Point at the floor and tap to start. (No depth camera on this phone, so obstacle detection is off.)');
-});
-renderer.xr.addEventListener('sessionend', () => {
-  hitTestSource = null;
-  groundRays.stop();
-});
-
-const controller = renderer.xr.getController(0);
-controller.addEventListener('select', () => {
-  if (placed || !reticle.visible) return;
-  const start = new THREE.Vector3().setFromMatrixPosition(reticle.matrix);
-  const from = new THREE.Vector3().setFromMatrixPosition(renderer.xr.getCamera().matrixWorld);
-  const direction = new THREE.Vector3(start.x - from.x, 0, start.z - from.z).normalize();
-  startRoute(demoRoute(start, direction, DEMO_LENGTH), start.y, [start, new THREE.Vector3(from.x, start.y, from.z)]);
-});
-scene.add(controller);
 
 const clock = new THREE.Clock();
 const point = new THREE.Vector3();
 const tangent = new THREE.Vector3();
 const runner = new THREE.Vector3();
-const look = new THREE.Vector3();
 
 renderer.setAnimationLoop((time, frame) => {
   const dt = Math.min(clock.getDelta(), 0.1);
@@ -185,18 +414,15 @@ renderer.setAnimationLoop((time, frame) => {
     if (placed) groundRays.sample(frame, referenceSpace, map);
   }
 
-  if (placed) {
+  if (placed && mode) {
     sensorClock += dt;
     const sensorTick = sensorClock >= SENSOR_INTERVAL;
     if (sensorTick) sensorClock = 0;
 
     let runnerS: number;
-    if (previewWorld) {
-      runnerS = advancePreviewRunner(dt);
-      if (sensorTick) {
-        previewWorld.sampleDepth(camera, map, now);
-        previewWorld.sampleGround(camera, map);
-      }
+    if (sim.world) {
+      runnerS = advanceSim(dt, now, sensorTick);
+      runner.copy(camera.position);
     } else {
       runner.setFromMatrixPosition(renderer.xr.getCamera().matrixWorld);
       runnerS = path.project(runner);
@@ -210,34 +436,20 @@ renderer.setAnimationLoop((time, frame) => {
     path.tangentAt(partner.s, tangent);
     mascot.root.position.copy(point);
     // Faces down the path while running or looking ahead; turns to face you otherwise.
-    const facing = partner.state === 'run' || partner.state === 'look' ?Math.atan2(tangent.x, tangent.z) : Math.atan2(-tangent.x, -tangent.z);
+    const facing = partner.state === 'run' || partner.state === 'look' ? Math.atan2(tangent.x, tangent.z) : Math.atan2(-tangent.x, -tangent.z);
     const turn = Math.atan2(Math.sin(facing - mascot.root.rotation.y), Math.cos(facing - mascot.root.rotation.y));
     mascot.root.rotation.y += turn * Math.min(1, dt * 5);
     mascot.update(dt, seconds, partner.gait);
     shadow.position.set(point.x, point.y + 0.003, point.z);
 
-    if (sensorTick) markers.update(map, previewWorld ? camera.position : runner, now);
-
+    if (sensorTick) markers.update(map, runner, now);
+    hud.showTurn(routeRun ? routeRun.nextTurn(runnerS) : null);
     hud.update({ paceMetersPerSecond: partner.currentSpeed, leadMeters: Math.max(0, partner.s - runnerS) });
     hud.say(stateMessage(partner.state));
   }
 
   renderer.render(scene, camera);
 });
-
-/** The simulated runner jogs along the displayed path and stops behind the partner when it stops. */
-function advancePreviewRunner(dt: number): number {
-  const partnerStopped = partner.state === 'break' || partner.state === 'blocked' || partner.state === 'done';
-  let limit = partnerStopped ? partner.s - 1.2 : path.length;
-  if (path.status.blockedAtS !== null) limit = Math.min(limit, path.status.blockedAtS - 0.6);
-  previewRunnerS = Math.min(limit, previewRunnerS + PREVIEW_RUNNER_PACE * dt);
-  path.pointAt(previewRunnerS - 0.8, point);
-  const eye = previewWorld!.groundHeight(point.x, point.z) + 1.5;
-  camera.position.set(point.x, eye, point.z);
-  path.pointAt(previewRunnerS + 3, look);
-  camera.lookAt(look.x, look.y + 0.4, look.z);
-  return previewRunnerS;
-}
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -246,7 +458,9 @@ addEventListener('resize', () => {
 });
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { rerev: { path, partner, map, camera, getRunnerS: () => previewRunnerS } });
+  Object.assign(window, { rerev: { path, partner, map, camera, sim, getRouteRun: () => routeRun } });
 }
 
-void init();
+void (async () => {
+  arSupported = (await navigator.xr?.isSessionSupported('immersive-ar').catch(() => false)) ?? false;
+})();
