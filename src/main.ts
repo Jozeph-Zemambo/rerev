@@ -4,12 +4,16 @@ import { DepthSensor } from './ar/depthSensor';
 import { GroundRays } from './ar/groundRays';
 import { apply, arBearing } from './geo/alignment';
 import { Compass, Gps, type Fix } from './geo/sensors';
+import { HeartRateFeed } from './heart/heartRateFeed';
 import { Hud } from './hud';
+import { Coach, type CoachLine } from './partner/coach';
 import { Mascot } from './partner/mascot';
 import { Partner, type PartnerState } from './partner/partner';
 import { RouteRun } from './run/routeRun';
 import { PreviewWorld } from './sim/previewWorld';
 import { Planner, type RunGoal } from './ui/planner';
+import { SpeechBubble } from './ui/speechBubble';
+import { BrowserVoice } from './ui/voice';
 import { HazardMarkers } from './world/hazardMarkers';
 import { demoRoute, Path, type RoutePoint } from './world/path';
 import { createShadow } from './world/shadow';
@@ -32,6 +36,12 @@ const hud = new Hud();
 const gps = new Gps();
 const compass = new Compass();
 const planner = new Planner(gps);
+const heart = new HeartRateFeed();
+heart.connect(import.meta.env.VITE_CONVEX_URL as string | undefined);
+const coach = new Coach();
+const voice = new BrowserVoice();
+const bubble = new SpeechBubble(hud.root);
+const DEFAULT_ZONE = { low: 130, high: 160 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -77,6 +87,9 @@ let placed = false;
 let hitTestSource: XRHitTestSource | null = null;
 let depthEnabled = false;
 let sensorClock = 0;
+let runStartedAt = 0;
+let lastState: PartnerState | null = null;
+let wasDetouring = false;
 
 /** Desktop preview state (no AR): a simulated world, runner, GPS and compass. */
 const sim = {
@@ -104,8 +117,27 @@ planner.onStart = goal => void startRun({ kind: 'route', goal });
 
 hud.breakButton.onclick = () => {
   partner.setBreak(!partner.breaking);
-  hud.breakButton.textContent = partner.breaking ? "Let's go" : 'Take a break';
+  coach.autoBreak = false;
+  speak({ text: partner.breaking ? 'Sure, breather time. Jog on the spot with me.' : "Alright, let's go!", mood: 'cheer' }, true);
 };
+hud.hrStat.onclick = () => {
+  hud.hrPanel.hidden = !hud.hrPanel.hidden;
+  if (!hud.hrPanel.hidden) heart.manual = Number(hud.hrManual.value);
+};
+hud.hrManual.oninput = () => {
+  heart.manual = Number(hud.hrManual.value);
+  hud.hrManualOut.textContent = hud.hrManual.value;
+};
+hud.hrAuto.onclick = () => {
+  heart.manual = null;
+  hud.hrPanel.hidden = true;
+};
+
+/** The buddy says something: speech bubble over its head plus the voice. */
+function speak(line: CoachLine, interrupt = false) {
+  bubble.show(line, performance.now() / 1000);
+  voice.speak(line.text, interrupt);
+}
 hud.slowerButton.onclick = () => partner.nudgePace(-0.3);
 hud.fasterButton.onclick = () => partner.nudgePace(0.3);
 hud.finishButton.onclick = () => void finishRun();
@@ -125,6 +157,8 @@ function showRunUi(running: boolean) {
 async function startRun(next: RunMode) {
   mode = next;
   partner.goalPace = next.kind === 'route' ? 1000 / next.goal.paceSecondsPerKm : QUICK_PACE;
+  coach.zone = next.kind === 'route' ? next.goal.zone : DEFAULT_ZONE;
+  heart.resetSimulation();
   routeRun = next.kind === 'route' ? new RouteRun(next.goal.route) : null;
   // Sensor permissions must be requested from this tap.
   if (next.kind === 'route') {
@@ -157,6 +191,8 @@ function endRun() {
     sim.truthLine = null;
   }
   scene.background = null;
+  bubble.hide();
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
   hud.showTurn(null);
   hud.showControls(false);
   showRunUi(false);
@@ -169,6 +205,11 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   for (const seed of seeds) map.seedGround(seed.x, floorY, seed.z, 1);
   path.setRoute(points, floorY);
   partner.reset(runnerS);
+  partner.effort = 1;
+  runStartedAt = performance.now() / 1000;
+  coach.reset(runStartedAt);
+  lastState = null;
+  wasDetouring = false;
   mascot.root.visible = true;
   shadow.visible = true;
   reticle.visible = false;
@@ -394,6 +435,21 @@ function stateMessage(state: PartnerState): string {
   }
 }
 
+/** The buddy speaks up when its situation changes: something in the way, a drop, the finish. */
+function announce() {
+  if (partner.state !== lastState) {
+    if (partner.state === 'blocked') {
+      const drop = path.status.blockReason === 'drop';
+      speak({ text: drop ? "Careful! There's a drop ahead." : "Whoa, something's blocking the way.", mood: 'care' }, true);
+    } else if (partner.state === 'done') {
+      speak({ text: 'We made it! Great run.', mood: 'cheer' }, true);
+    }
+    lastState = partner.state;
+  }
+  if (path.status.detouring && !wasDetouring) speak({ text: "Something's in the way. Follow me around it!", mood: 'info' });
+  wasDetouring = path.status.detouring;
+}
+
 const clock = new THREE.Clock();
 const point = new THREE.Vector3();
 const tangent = new THREE.Vector3();
@@ -430,7 +486,14 @@ renderer.setAnimationLoop((time, frame) => {
     }
 
     path.update(dt, seconds, runnerS, map, now, sensorTick);
+
+    // Heart rate → coach → buddy behaviour and what it says.
+    if (sim.world) heart.simulate(dt, partner.currentSpeed, partner.breaking, now - runStartedAt);
+    const line = coach.update(now, heart.bpm, partner);
+    if (line) speak(line, line.mood === 'care');
+    partner.effort = coach.effort;
     partner.update(dt, runnerS);
+    announce();
 
     path.pointAt(partner.s, point);
     path.tangentAt(partner.s, tangent);
@@ -444,8 +507,17 @@ renderer.setAnimationLoop((time, frame) => {
 
     if (sensorTick) markers.update(map, runner, now);
     hud.showTurn(routeRun ? routeRun.nextTurn(runnerS) : null);
-    hud.update({ paceMetersPerSecond: partner.currentSpeed, leadMeters: Math.max(0, partner.s - runnerS) });
+    hud.update({
+      heartRate: heart.bpm,
+      heartSource: heart.source,
+      zone: coach.zone,
+      paceMetersPerSecond: partner.currentSpeed,
+      leadMeters: Math.max(0, partner.s - runnerS),
+    });
     hud.say(stateMessage(partner.state));
+    const breakLabel = partner.breaking ? "Let's go" : 'Take a break';
+    if (hud.breakButton.textContent !== breakLabel) hud.breakButton.textContent = breakLabel;
+    bubble.update(point, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera, now);
   }
 
   renderer.render(scene, camera);
@@ -458,7 +530,7 @@ addEventListener('resize', () => {
 });
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { rerev: { path, partner, map, camera, sim, getRouteRun: () => routeRun } });
+  Object.assign(window, { rerev: { path, partner, map, camera, sim, coach, heart, getRouteRun: () => routeRun } });
 }
 
 void (async () => {

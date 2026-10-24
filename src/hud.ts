@@ -1,10 +1,14 @@
 const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 export type HudStats = {
-  heartRate?: number;
+  heartRate: number | null;
+  heartSource: 'watch' | 'manual' | 'simulated' | 'none';
+  zone: { low: number; high: number };
   paceMetersPerSecond: number;
   leadMeters: number;
 };
+
+const SOURCE_LABEL = { watch: 'bpm · watch', manual: 'bpm · demo', simulated: 'bpm · sim', none: 'no watch' } as const;
 
 const TURN_ARROWS: Record<string, string> = {
   left: '↰',
@@ -20,6 +24,12 @@ const TURN_ARROWS: Record<string, string> = {
 export class Hud {
   readonly root = byId('overlay');
   private readonly hr = byId('hr');
+  private readonly hrSource = byId('hr-source');
+  readonly hrStat = byId<HTMLButtonElement>('hr-stat');
+  readonly hrPanel = byId('hr-panel');
+  readonly hrManual = byId<HTMLInputElement>('hr-manual');
+  readonly hrManualOut = byId<HTMLOutputElement>('hr-manual-out');
+  readonly hrAuto = byId<HTMLButtonElement>('hr-auto');
   private readonly pace = byId('pace-live');
   private readonly lead = byId('lead');
   private readonly message = byId('message');
@@ -56,7 +66,10 @@ export class Hud {
   }
 
   update(stats: HudStats) {
-    this.hr.textContent = stats.heartRate ? String(Math.round(stats.heartRate)) : '--';
+    const bpm = stats.heartRate;
+    this.hr.textContent = bpm ? String(Math.round(bpm)) : '--';
+    this.hr.dataset.band = !bpm ? '' : bpm > stats.zone.high ? 'above' : bpm < stats.zone.low ? 'below' : 'in';
+    this.hrSource.textContent = SOURCE_LABEL[stats.heartSource];
     this.pace.textContent = formatPace(stats.paceMetersPerSecond);
     this.lead.textContent = stats.leadMeters.toFixed(1);
   }
