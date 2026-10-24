@@ -29,6 +29,11 @@ export class Partner {
   effort = 1;
   targetLead = 2;
   maxLead = 4.5;
+  /**
+   * Outdoors on a planned route the ground just ahead of you is the pavement you're on, so the
+   * buddy may keep its usual lead even before the camera has seen it. Indoors it stays strict.
+   */
+  trustGroundAhead = false;
 
   private speed = 0;
   private onBreak = false;
@@ -72,7 +77,8 @@ export class Partner {
   update(dt: number, runnerS: number) {
     const end = this.path.length - 0.3;
     const blockedAt = this.path.status.blockedAtS;
-    const seenLimit = this.path.status.seenUntilS - SEEN_MARGIN;
+    const seen = this.path.status.seenUntilS - SEEN_MARGIN;
+    const seenLimit = this.trustGroundAhead ? Math.max(seen, runnerS + this.maxLead + 0.5) : seen;
     const lead = this.s - runnerS;
 
     if (this.s >= end) this.state = 'done';
