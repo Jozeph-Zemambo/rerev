@@ -9,6 +9,7 @@ const TURN_LATE = 4;
 /** Splits and halfway only make sense on runs at least this long. */
 const LONG_RUN = 800;
 const FINAL_STRETCH = 100;
+const LAP_CHEERS = ["That's lap {n}!", 'Lap {n} done. Looking good!', 'Lap {n}! Keep that rhythm.', "Lap {n}. You're flying!"];
 
 /**
  * What the buddy says about the route itself: turns coming up, kilometre splits with your pace,
@@ -23,10 +24,15 @@ export class RouteCallouts {
   private lastUpdate = 0;
   private saidHalfway = false;
   private saidFinal = false;
+  private lapLength = 0;
+  private nextLap = 1;
 
-  reset(now: number, steps: TurnStep[] = [], distance = 0) {
+  /** `lapLength` turns on lap calls (on the lap course). */
+  reset(now: number, steps: TurnStep[] = [], distance = 0, lapLength = 0) {
     this.steps = steps;
     this.distance = distance;
+    this.lapLength = lapLength;
+    this.nextLap = 1;
     this.called.clear();
     this.nextKm = 1;
     this.lastSplitAt = now;
@@ -63,6 +69,11 @@ export class RouteCallouts {
         return { text: `${turn}, then ${then.charAt(0).toLowerCase()}${then.slice(1)}.`, mood: 'info' };
       }
       return { text: turnPhrase(step)!, mood: 'info' };
+    }
+
+    if (this.lapLength > 0 && travelled >= this.nextLap * this.lapLength) {
+      const lap = this.nextLap++;
+      return { text: LAP_CHEERS[(lap - 1) % LAP_CHEERS.length].replace('{n}', String(lap)), mood: 'cheer' };
     }
 
     if (travelled >= this.nextKm * 1000) {

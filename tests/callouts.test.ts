@@ -37,6 +37,17 @@ test('kilometre splits leave out time spent on a breather', () => {
   assert.ok(said.includes('Last hundred metres. Finish strong!'));
 });
 
+test('the lap course calls each lap', () => {
+  const callouts = new RouteCallouts();
+  callouts.reset(0, [], 0, 13.5);
+  const said: string[] = [];
+  for (let s = 0; s <= 30; s += 0.5) {
+    const line = callouts.update(s, s, s, false);
+    if (line) said.push(line.text);
+  }
+  assert.deepEqual(said, ["That's lap 1!", 'Lap 2 done. Looking good!']);
+});
+
 test('short runs get no splits or halfway', () => {
   assert.deepEqual(run([], 300), []);
 });

@@ -349,7 +349,7 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   partner.trustGroundAhead = !!routeRun;
   runStartedAt = performance.now() / 1000;
   coach.reset(runStartedAt);
-  callouts.reset(runStartedAt, routeRun?.route.steps, routeRun?.route.distance);
+  callouts.reset(runStartedAt, routeRun?.route.steps, routeRun?.route.distance, lapCourse ? LAP_LENGTH : 0);
   recorder.start(runStartedAt, {
     kind: mode?.kind ?? 'quick',
     goalPaceSecPerKm: 1000 / partner.goalPace,
