@@ -46,6 +46,8 @@ export function answerOf(transcript: string): 'yes' | 'no' | null {
  * keywords; these are the fallbacks if Claude isn't available.
  */
 const SOFT: [Decision, RegExp][] = [
+  // Feeling unwell is never "tough bit, keep going": stop, even without Claude.
+  [{ action: 'break', lineId: 'cmd_break_unwell' }, /\b(chest|dizzy|faint|light ?headed|unwell|sick|nause\w*|heart (hurts|pain)|palpitations?)\b/],
   [{ action: 'ask_break', lineId: 'confirm_ask_break_tired' }, /\b(tired|exhausted|knackered|wiped|dying|dead|my legs|cramp|so hot|out of breath|winded|struggling)\b/],
   [{ action: 'none', lineId: 'chat_tough' }, /\b(steep|hill|hard|tough|brutal|hurts|ouch|ugh|oof)\b/],
   [{ action: 'none', lineId: 'chat_thanks' }, /\b(thanks|thank you|good job|love you|you'?re (great|awesome|cute))\b/],

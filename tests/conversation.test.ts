@@ -46,3 +46,10 @@ test('soft phrases ask or encourage, never act', () => {
   assert.equal(softDecision('ugh this hill')?.action, 'none');
   assert.equal(softDecision('what time is it'), null);
 });
+
+test('feeling unwell stops the run even without Claude', () => {
+  for (const said of ['my chest hurts', "I'm feeling dizzy", 'I feel sick', 'kind of lightheaded']) {
+    assert.deepEqual(softDecision(said), { action: 'break', lineId: 'cmd_break_unwell' }, said);
+  }
+  assert.equal(softDecision('my legs hurt')?.action, 'ask_break');
+});
