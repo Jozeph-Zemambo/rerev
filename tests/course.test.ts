@@ -110,6 +110,19 @@ test('walking out along a corridor and back to the start is an out-and-back, not
   assert.ok(course.length > 5.5 && course.length < 6.8, `the way out only, got ${course.length.toFixed(2)} m`);
 });
 
+test('walking out along a corridor and only partway back is an out-and-back of the way out', () => {
+  const partway = [{ x: 0, z: 0 }, { x: 0, z: -10 }, { x: 0.3, z: -10 }, { x: 0.3, z: -3 }];
+  const course = buildCourse(walk(partway))!;
+  assert.equal(course.kind, 'line');
+  assert.ok(course.length > 9.4 && course.length < 10.8, `the way out only, got ${course.length.toFixed(2)} m`);
+  // No hairpin left in it: every bend is gentle.
+  for (let i = 1; i < course.points.length - 1; i++) {
+    const [a, b, c] = [course.points[i - 1], course.points[i], course.points[i + 1]];
+    const turn = Math.abs(Math.atan2((b.x - a.x) * (c.z - b.z) - (b.z - a.z) * (c.x - b.x), (b.x - a.x) * (c.x - b.x) + (b.z - a.z) * (c.z - b.z)));
+    assert.ok(turn < Math.PI / 2, `bends ${((turn * 180) / Math.PI).toFixed(0)}° at ${b.x.toFixed(2)},${b.z.toFixed(2)}`);
+  }
+});
+
 test('too short a walk is not a course', () => {
   assert.equal(buildCourse(walk([{ x: 0, z: 0 }, { x: 0, z: -3 }])), null);
 });
@@ -173,7 +186,8 @@ test('the buddy brakes into a turnaround, turns on the spot, then picks up again
   let t = 0;
   for (; t < 20 && partner.s < turn + 4; t += dt) {
     partner.update(dt, runnerS);
-    runnerS = Math.max(runnerS, partner.s - 2);
+    // A runner at 2.3 m/s, who can't overtake the buddy.
+    runnerS = Math.max(runnerS, Math.min(runnerS + 2.3 * dt, partner.s - 0.5));
     path.status.seenUntilS = path.length;
     const d = turn - partner.s;
     if (partner.state === 'turn') paused += dt;
@@ -185,6 +199,29 @@ test('the buddy brakes into a turnaround, turns on the spot, then picks up again
   assert.ok(speedAt.get('before 0.3')! < 1.1, `nearly stopped 0.3 m out, got ${speedAt.get('before 0.3')!.toFixed(2)}`);
   assert.ok(paused >= 0.3 && paused <= 0.6, `turns on the spot for ${paused.toFixed(2)} s`);
   assert.ok(speedAt.get('after 2.5')! > 1.8, `back up to pace after, got ${speedAt.get('after 2.5')!.toFixed(2)}`);
+});
+
+test('at a turnaround the buddy waits for a slower runner instead of running back past them', () => {
+  const { path, turn } = straightOutAndBack();
+  const partner = new Partner(path);
+  partner.goalPace = 2.5;
+  partner.turnarounds = [turn];
+  partner.reset(0);
+  const dt = 1 / 60;
+  let runnerS = 0;
+  let waited = 0;
+  let leftWith: number | null = null;
+  for (let t = 0; t < 30 && leftWith === null; t += dt) {
+    const was = partner.state;
+    partner.update(dt, runnerS);
+    path.status.seenUntilS = path.length;
+    if (partner.state === 'turn') waited += dt;
+    if (was === 'turn' && partner.state !== 'turn') leftWith = runnerS;
+    runnerS += 0.9 * dt;
+  }
+  assert.ok(leftWith !== null, 'it set off again');
+  assert.ok(leftWith >= turn - 1.5, `set off with the runner ${(turn - leftWith).toFixed(2)} m short of the turn`);
+  assert.ok(waited > 1, `waited ${waited.toFixed(2)} s for them`);
 });
 
 test('the buddy never overshoots a turnaround, even at a sprint', () => {

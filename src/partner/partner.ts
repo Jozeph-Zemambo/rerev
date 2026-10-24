@@ -16,11 +16,14 @@ const STOP_SHORT = 1.2;
 const SEEN_MARGIN = 0.5;
 /**
  * Turning round at the end of an out-and-back: brake steadily over the last TURN_SLOW metres
- * down to TURN_SPEED, jog on the spot for TURN_PAUSE seconds while turning, then pick up again.
+ * down to TURN_SPEED, jog on the spot for at least TURN_PAUSE seconds while turning, then pick
+ * up again. It waits there until you're within TURN_WAIT of the turn: lead is measured along
+ * the path, so without that it would run straight back past a slower runner.
  */
 const TURN_SLOW = 2;
 const TURN_SPEED = 0.35;
 const TURN_PAUSE = 0.4;
+const TURN_WAIT = 1.5;
 
 /**
  * Paces itself against the runner: stays a couple of metres ahead, jogs on the spot if it
@@ -52,6 +55,7 @@ export class Partner {
   /** Index of the next turnaround still ahead, and how long is left of the pause at it. */
   private nextTurn = 0;
   private turnPause = 0;
+  private turnStarted = false;
   private readonly path: Path;
 
   constructor(path: Path) {
@@ -76,6 +80,7 @@ export class Partner {
     this.speed = 0;
     this.onBreak = false;
     this.turnPause = 0;
+    this.turnStarted = false;
     this.nextTurn = this.turnarounds.findIndex(t => t > this.s);
     if (this.nextTurn < 0) this.nextTurn = this.turnarounds.length;
   }
@@ -100,12 +105,14 @@ export class Partner {
   update(dt: number, runnerS: number) {
     const end = this.path.length - 0.3;
     const turnAt = this.turnaroundAhead;
-    if (this.s >= turnAt - 0.001 && this.state !== 'turn' && !this.onBreak) {
+    const atTurn = this.s >= turnAt - 0.001;
+    if (atTurn && !this.turnStarted) {
       // Arrived at the turnaround: stop and turn round.
+      this.turnStarted = true;
       this.turnPause = TURN_PAUSE;
       this.speed = 0;
     }
-    const turning = this.turnPause > 0 && !this.onBreak;
+    const turning = atTurn && !this.onBreak;
     const blockedAt = this.path.status.blockedAtS;
     const seen = this.path.status.seenUntilS - SEEN_MARGIN;
     const seenLimit = this.trustGroundAhead ? Math.max(seen, runnerS + this.maxLead + 0.5) : seen;
@@ -131,7 +138,10 @@ export class Partner {
     if (this.state === 'turn') {
       this.speed = 0;
       this.turnPause -= dt;
-      if (this.turnPause <= 0) this.nextTurn++;
+      if (this.turnPause <= 0 && runnerS >= turnAt - TURN_WAIT) {
+        this.nextTurn++;
+        this.turnStarted = false;
+      }
     } else if (turnAt < Infinity) {
       // Constant braking into the turn: v² = v_turn² + 2·a·d, reaching full pace TURN_SLOW out.
       const brake = (this.goalPace * this.goalPace - TURN_SPEED * TURN_SPEED) / (2 * TURN_SLOW);

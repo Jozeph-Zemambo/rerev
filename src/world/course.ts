@@ -11,6 +11,8 @@ export const LOOP_CLOSE = 2;
  * is an out-and-back, not a loop. A circle scores 1/4π ≈ 0.08 on area / length².
  */
 const THIN_LOOP = 0.015;
+/** Coming back within this distance of the way out counts as coming back the same way. */
+const RETRACE = 0.75;
 /** Wobble smaller than this (phone sway, tracking jitter) is simplified away. Corners stay. */
 const SIMPLIFY = 0.12;
 /** Corners are rounded by at most this much on each side, so the buddy doesn't pivot on a pin. */
@@ -79,9 +81,11 @@ export function buildCourse(raw: RoutePoint[]): Course | null {
     return { kind: 'loop', points, length: polylineLength(points) };
   }
   let line = smoothed;
-  if (Math.hypot(raw.at(-1)!.x - raw[0].x, raw.at(-1)!.z - raw[0].z) <= LOOP_CLOSE) {
-    // Walked out and back to the start: the course is the way out, as far as you got.
-    line = smoothed.slice(0, farthestFrom(smoothed, smoothed[0]) + 1);
+  // Walked out and then back the same way (all the way to the start, or only some of it): the
+  // course is the way out, as far as you got. Otherwise the fold would be a spike in the course.
+  const fold = farthestFrom(smoothed, smoothed[0]);
+  if (retraces(smoothed.slice(fold), smoothed.slice(0, fold + 1))) {
+    line = smoothed.slice(0, fold + 1);
     if (polylineLength(line) < MIN_COURSE / 2) return null;
   }
   const points = roundCorners(simplify(line, SIMPLIFY), false);
@@ -208,6 +212,18 @@ function closeLoop(points: RoutePoint[]): RoutePoint[] {
   if (dist(out.at(-1)!, out[0]) < 0.05) out.pop();
   out.push({ ...out[0] });
   return out;
+}
+
+/** True if (nearly) all of `rest` runs within RETRACE of `line`: you came back the way you went. */
+function retraces(rest: RoutePoint[], line: RoutePoint[]) {
+  if (rest.length < 2 || line.length < 2) return false;
+  let near = 0;
+  for (const p of rest) {
+    let best = Infinity;
+    for (let i = 1; i < line.length && best > RETRACE; i++) best = Math.min(best, segmentDistance(p, line[i - 1], line[i]));
+    if (best <= RETRACE) near++;
+  }
+  return near >= rest.length * 0.9;
 }
 
 function farthestFrom(points: RoutePoint[], from: RoutePoint) {
