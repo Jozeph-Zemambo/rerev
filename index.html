@@ -3,11 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>rerev</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ReReV</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="overlay">
+      <div id="topbar">
+        <div class="stat"><span class="k">Heart</span><span id="hr" class="v">--</span><span class="u">bpm</span></div>
+        <div class="stat"><span class="k">Pace</span><span id="pace" class="v">--</span><span class="u">min/km</span></div>
+        <div class="stat"><span class="k">Buddy</span><span id="lead" class="v">--</span><span class="u">m ahead</span></div>
+      </div>
+      <div id="message">Starting up…</div>
+      <div id="controls" hidden>
+        <button id="btn-break" type="button">Take a break</button>
+        <button id="btn-slower" type="button">Slower</button>
+        <button id="btn-faster" type="button">Faster</button>
+        <button id="btn-reset" type="button">New path</button>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
