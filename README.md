@@ -60,6 +60,10 @@ flowchart LR
 - **Callouts** (`src/run/callouts.ts`): the buddy calls turns about 30 m before them ("Left onto Richard Rd, then bear right"), plus kilometre splits, halfway and the final stretch.
 - **Coach** (`src/partner/coach.ts`): plain rules on heart rate. Above the zone it eases off, then takes a breather and resumes on recovery; below the zone it picks up the pace. The summary shows how much of the run you spent in your zone, with a heart-rate chart.
 
+## Tests
+
+`npm test` runs the logic that can be checked without a phone: kerbs and steps in the surface map, the alignment fit, route progress on out-and-back streets, coach breathers, spoken callouts, and voice intents. `npm run bench:align` is the slower alignment benchmark.
+
 ## Stack
 
 three.js (WebXR), TypeScript, Vite, Convex, Leaflet with CARTO/OpenStreetMap tiles, OSRM foot routing (FOSSGIS), Open-Meteo elevation, Chrome speech recognition and synthesis.
