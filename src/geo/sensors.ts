@@ -43,12 +43,21 @@ export class Gps {
 type OrientationWithCompass = DeviceOrientationEvent & { webkitCompassHeading?: number };
 
 /**
+ * Phone compasses point to magnetic north; maps use true north. In Calgary magnetic north is
+ * about 13° east of true north (2026, approximate). The GPS refit corrects whatever is left.
+ */
+const MAGNETIC_DECLINATION = (13.2 * Math.PI) / 180;
+/** Readings older than this are stale (e.g. events paused during an AR session). */
+const STALE_AFTER = 2;
+
+/**
  * Compass heading of the direction the back camera faces, radians clockwise from north.
  * Android Chrome reports absolute orientation via `deviceorientationabsolute`; iOS Safari via
  * `webkitCompassHeading`. Smoothed, because raw magnetometer readings jitter.
  */
 export class Compass {
-  heading: number | null = null;
+  private smoothed: number | null = null;
+  private updatedAt = -Infinity;
   private sinAvg = 0;
   private cosAvg = 0;
   private started = false;
@@ -73,7 +82,14 @@ export class Compass {
     // Circular moving average.
     this.sinAvg += (Math.sin(heading) - this.sinAvg) * 0.15;
     this.cosAvg += (Math.cos(heading) - this.cosAvg) * 0.15;
-    this.heading = (Math.atan2(this.sinAvg, this.cosAvg) + 2 * Math.PI) % (2 * Math.PI);
+    this.smoothed = Math.atan2(this.sinAvg, this.cosAvg);
+    this.updatedAt = performance.now() / 1000;
+  }
+
+  /** True-north heading of the back camera, radians clockwise from north, or null if stale/unknown. */
+  get heading(): number | null {
+    if (this.smoothed === null || performance.now() / 1000 - this.updatedAt > STALE_AFTER) return null;
+    return (this.smoothed + MAGNETIC_DECLINATION + 4 * Math.PI) % (2 * Math.PI);
   }
 }
 
