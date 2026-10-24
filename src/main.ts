@@ -687,6 +687,8 @@ function stateMessage(state: PartnerState): string {
       return 'Stairs! Taking them nice and easy.';
     case 'look':
       return "Point your phone ahead so I can see where we're going.";
+    case 'turn':
+      return 'Turning round. Follow me back!';
     case 'wait':
       return "I'll wait up for you. Catch up when you're ready.";
     case 'break':

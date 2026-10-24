@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Path } from '../world/path';
 import type { Gait } from './mascot';
 
-export type PartnerState = 'run' | 'stairs' | 'look' | 'wait' | 'break' | 'blocked' | 'done';
+export type PartnerState = 'run' | 'stairs' | 'look' | 'turn' | 'wait' | 'break' | 'blocked' | 'done';
 
 /** On stairs the buddy slows to a careful walk at this fraction of the goal pace. */
 const STAIRS_PACE = 0.45;
@@ -14,6 +14,13 @@ const MAX_PACE = 4;
 const STOP_SHORT = 1.2;
 /** Never runs closer than this to ground the camera has not seen yet. */
 const SEEN_MARGIN = 0.5;
+/**
+ * Turning round at the end of an out-and-back: brake steadily over the last TURN_SLOW metres
+ * down to TURN_SPEED, jog on the spot for TURN_PAUSE seconds while turning, then pick up again.
+ */
+const TURN_SLOW = 2;
+const TURN_SPEED = 0.35;
+const TURN_PAUSE = 0.4;
 
 /**
  * Paces itself against the runner: stays a couple of metres ahead, jogs on the spot if it
@@ -34,9 +41,17 @@ export class Partner {
    * buddy may keep its usual lead even before the camera has seen it. Indoors it stays strict.
    */
   trustGroundAhead = false;
+  /**
+   * Distances along the path where it doubles back on itself (out-and-back turnarounds),
+   * ascending. Set before `reset`.
+   */
+  turnarounds: number[] = [];
 
   private speed = 0;
   private onBreak = false;
+  /** Index of the next turnaround still ahead, and how long is left of the pause at it. */
+  private nextTurn = 0;
+  private turnPause = 0;
   private readonly path: Path;
 
   constructor(path: Path) {
@@ -60,6 +75,9 @@ export class Partner {
     this.state = 'run';
     this.speed = 0;
     this.onBreak = false;
+    this.turnPause = 0;
+    this.nextTurn = this.turnarounds.findIndex(t => t > this.s);
+    if (this.nextTurn < 0) this.nextTurn = this.turnarounds.length;
   }
 
   setBreak(onBreak: boolean) {
@@ -74,8 +92,20 @@ export class Partner {
     this.goalPace = THREE.MathUtils.clamp(this.goalPace + delta, MIN_PACE, MAX_PACE);
   }
 
+  /** Distance along the path of the turnaround coming up, or Infinity if there are none left. */
+  get turnaroundAhead(): number {
+    return this.turnarounds[this.nextTurn] ?? Infinity;
+  }
+
   update(dt: number, runnerS: number) {
     const end = this.path.length - 0.3;
+    const turnAt = this.turnaroundAhead;
+    if (this.s >= turnAt - 0.001 && this.state !== 'turn' && !this.onBreak) {
+      // Arrived at the turnaround: stop and turn round.
+      this.turnPause = TURN_PAUSE;
+      this.speed = 0;
+    }
+    const turning = this.turnPause > 0 && !this.onBreak;
     const blockedAt = this.path.status.blockedAtS;
     const seen = this.path.status.seenUntilS - SEEN_MARGIN;
     const seenLimit = this.trustGroundAhead ? Math.max(seen, runnerS + this.maxLead + 0.5) : seen;
@@ -84,6 +114,7 @@ export class Partner {
     if (this.s >= end) this.state = 'done';
     else if (this.onBreak) this.state = 'break';
     else if (blockedAt !== null && blockedAt - this.s < STOP_SHORT + 0.05) this.state = 'blocked';
+    else if (turning) this.state = 'turn';
     else if (this.state === 'wait' ? lead > this.targetLead : lead > this.maxLead) this.state = 'wait';
     else if (this.path.onStairs(this.s + 0.3)) this.state = 'stairs';
     else if (this.s >= seenLimit - 0.05) this.state = 'look';
@@ -97,7 +128,19 @@ export class Partner {
     const target =
       this.state === 'stairs' ? this.goalPace * STAIRS_PACE : moving ? this.goalPace * this.effort * hill * (lead < 1 ? 1.25 : 1) : 0;
     this.speed += (target - this.speed) * Math.min(1, dt * 3);
+    if (this.state === 'turn') {
+      this.speed = 0;
+      this.turnPause -= dt;
+      if (this.turnPause <= 0) this.nextTurn++;
+    } else if (turnAt < Infinity) {
+      // Constant braking into the turn: v² = v_turn² + 2·a·d, reaching full pace TURN_SLOW out.
+      const brake = (this.goalPace * this.goalPace - TURN_SPEED * TURN_SPEED) / (2 * TURN_SLOW);
+      const cap = Math.sqrt(TURN_SPEED * TURN_SPEED + 2 * Math.max(0, brake) * Math.max(0, turnAt - this.s));
+      this.speed = Math.min(this.speed, cap);
+    }
     let next = this.s + this.speed * dt;
+    // Never run past a turnaround without turning at it.
+    if (this.nextTurn < this.turnarounds.length) next = Math.min(next, this.turnarounds[this.nextTurn]);
     if (blockedAt !== null) next = Math.min(next, Math.max(this.s, blockedAt - STOP_SHORT));
     next = Math.min(next, Math.max(this.s, seenLimit));
     this.s = Math.min(end, next);

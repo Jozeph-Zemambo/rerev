@@ -480,7 +480,7 @@ export class Path {
 const unitScale = new THREE.Vector3(1, 1, 1);
 
 /** Evenly re-space a polyline so every sample is `step` metres apart. */
-function resample(points: RoutePoint[], step: number): RoutePoint[] {
+export function resample(points: RoutePoint[], step: number): RoutePoint[] {
   if (points.length < 2) return points.slice();
   const out: RoutePoint[] = [{ ...points[0] }];
   let carry = 0;
