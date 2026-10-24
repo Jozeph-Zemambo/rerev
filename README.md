@@ -18,7 +18,7 @@ Open http://localhost:5173. Without AR, the app runs a **preview simulation**: a
 
 ## Run it on an Android phone
 
-WebXR AR needs Chrome on an ARCore phone, over https. Keep the dev server running, then tunnel it:
+WebXR AR needs Chrome on an ARCore phone, over https. The latest build is live at **https://rerev.jkunistuff.workers.dev** (`npm run deploy` publishes a new one to Cloudflare). To test code changes before deploying, keep the dev server running and tunnel it:
 
 ```bash
 cloudflared tunnel --no-autoupdate --url http://localhost:5173
@@ -29,6 +29,10 @@ Open the printed `https://…trycloudflare.com` link on the phone.
 **Testing outdoors?** Add `?debug` to the link, or long-press the "Buddy" tile during a run, for a live readout of what the sensors are doing: tracking, depth points, ground-ray hits, GPS accuracy, compass, how many GPS and route matches the route fit is using, and how far you are from the drawn path.
 
 ## Heart rate from a Galaxy Watch
+
+**Over Bluetooth (anywhere, including outdoors):** install a Wear OS app that makes the watch act as a Bluetooth heart-rate strap (Heart for Bluetooth or HR2VP), then tap "Connect your watch" on the ReReV home screen and pick it. It reconnects by itself after that.
+
+**Through the laptop (at a desk):**
 
 1. Install **HeartRateOnStream** on the Wear OS watch.
 2. On the Mac: `npm run bridge`. It prints the Mac's address.

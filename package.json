@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "bridge": "node bridge/hr-bridge.mjs",
     "bench:align": "npx --yes tsx scripts/align-bench.ts",
-    "test": "npx --yes tsx --test tests/*.test.ts"
+    "test": "npx --yes tsx --test tests/*.test.ts",
+    "deploy": "npm run build && npx --yes wrangler deploy"
   },
   "devDependencies": {
     "@types/leaflet": "^1.9.22",
