@@ -38,7 +38,7 @@ export class GroundRays {
       const pose = frame.getHitTestResults(source)[0]?.getPose(referenceSpace);
       if (!pose) continue;
       const { x, y, z } = pose.transform.position;
-      map.addGroundSample(x, y, z, 2, 0.1);
+      map.addGroundSample(x, y, z, 2, map.groundTolerance(0.1));
     }
   }
 

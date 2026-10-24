@@ -92,7 +92,7 @@ export class PreviewWorld {
       }
     }
     points.sort((a, b) => a.d - b.d);
-    for (const { p } of points) map.addDepthPoint(p.x, p.y, p.z, now);
+    for (const { d, p } of points) map.addDepthPoint(p.x, p.y, p.z, now, d);
   }
 
   /** Simulated AR hit-tests: a few rays angled down at the ground ahead. */
@@ -106,7 +106,7 @@ export class PreviewWorld {
       this.hits.length = 0;
       this.raycaster.intersectObjects(this.solids, false, this.hits);
       const hit = this.hits[0];
-      if (hit) map.addGroundSample(hit.point.x, hit.point.y, hit.point.z, 2, 0.1);
+      if (hit) map.addGroundSample(hit.point.x, hit.point.y, hit.point.z, 2, map.groundTolerance(0.1));
     }
   }
 

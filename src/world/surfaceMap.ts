@@ -35,6 +35,8 @@ const CLEAR_AFTER = 0.6;
 const REMEMBER = 15;
 /** How far (in cells) to look for known ground when a cell has none of its own. */
 const REFERENCE_RINGS = 7;
+/** Depth readings get noisier with distance: hazard thresholds grow by this much per metre. */
+const NOISE_PER_METRE = 0.02;
 const MAX_GROUND_WEIGHT = 20;
 
 type Vote = { count: number; at: number; confirmed: boolean };
@@ -59,6 +61,17 @@ const cellIndex = (v: number) => Math.floor(v / CELL_SIZE);
 
 export class SurfaceMap {
   private cells = new Map<number, Cell>();
+  /**
+   * Height changes up to this much are walked over, not avoided, and ground may be learned
+   * across them. 0 indoors (every step matters); about a kerb outdoors, where stepping off the
+   * pavement to cross a road is normal.
+   */
+  walkableStep = 0;
+
+  /** How far a trusted ground sample may sit from the known ground and still count as ground. */
+  groundTolerance(base: number) {
+    return Math.max(base, this.walkableStep);
+  }
 
   reset() {
     this.cells.clear();
@@ -136,11 +149,11 @@ export class SurfaceMap {
   }
 
   /**
-   * One 3D point from the depth camera. Classified by its height above the local ground:
-   * near the ground refines it, well above votes "obstacle", well below votes "drop".
-   * Points with no nearby ground to compare against are skipped (no guessing).
+   * One 3D point from the depth camera, `range` metres away. Classified by its height above the
+   * local ground: near the ground refines it, well above votes "obstacle", well below votes
+   * "drop". Points with no nearby ground to compare against are skipped (no guessing).
    */
-  addDepthPoint(x: number, y: number, z: number, now: number) {
+  addDepthPoint(x: number, y: number, z: number, now: number, range = 0) {
     const reference = this.referenceGround(x, z);
     if (reference === null) return;
     const height = y - reference;
@@ -148,8 +161,9 @@ export class SurfaceMap {
       this.addGroundSample(x, y, z, 0.3, GROUND_BAND, now);
       return;
     }
-    const isObstacle = height >= OBSTACLE_MIN && height <= OBSTACLE_MAX;
-    const isDrop = height <= -DROP_MIN && height >= -DROP_MAX;
+    const margin = NOISE_PER_METRE * range;
+    const isObstacle = height >= Math.max(OBSTACLE_MIN, this.walkableStep) + margin && height <= OBSTACLE_MAX;
+    const isDrop = height <= -(Math.max(DROP_MIN, this.walkableStep) + margin) && height >= -DROP_MAX;
     if (!isObstacle && !isDrop) return;
     const cell = this.cell(cellIndex(x), cellIndex(z));
     if (cell.groundWeight === 0) cell.ground = reference;

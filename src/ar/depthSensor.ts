@@ -52,7 +52,7 @@ export class DepthSensor {
 
     // Nearest first, so ground knowledge spreads outward before far points are judged.
     this.samples.sort((a, b) => a.d - b.d);
-    for (const s of this.samples) map.addDepthPoint(s.x, s.y, s.z, now);
+    for (const s of this.samples) map.addDepthPoint(s.x, s.y, s.z, now, s.d);
     return this.samples.length;
   }
 }

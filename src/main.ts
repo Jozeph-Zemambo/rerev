@@ -34,6 +34,8 @@ const QUICK_LENGTH = 20;
 const QUICK_PACE = 1.6;
 /** Depth, hazard planning and markers run at ~10 Hz; drawing runs every frame. */
 const SENSOR_INTERVAL = 0.1;
+/** Outdoors, stepping off a kerb to cross the road is normal, not a hazard. */
+const KERB = 0.2;
 /** Preview-only: how wrong the simulated compass is, and how noisy simulated GPS is. */
 const SIM_COMPASS_ERROR = (20 * Math.PI) / 180;
 const SIM_GPS_NOISE = 4;
@@ -323,6 +325,7 @@ function endRun() {
 
 function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], runnerS: number) {
   map.reset();
+  map.walkableStep = routeRun ? KERB : 0;
   for (const seed of seeds) map.seedGround(seed.x, floorY, seed.z, 1);
   path.setRoute(points, floorY);
   path.group.visible = true;
