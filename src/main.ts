@@ -500,7 +500,8 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   trackingLostSince = null;
   lastTrackingCall = -Infinity;
   question.clear();
-  speak({ id: RUN_STARTS[starts++ % RUN_STARTS.length] }, { interrupt: true });
+  // A course run gets its own opener ("Loop's ready. Let's go!") instead.
+  if (mode?.kind !== 'course') speak({ id: RUN_STARTS[starts++ % RUN_STARTS.length] }, { interrupt: true });
   mascot.root.visible = true;
   shadow.visible = true;
   reticle.visible = false;
