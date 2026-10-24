@@ -274,8 +274,10 @@ function endRun() {
   routeRun = null;
   mascot.root.visible = false;
   shadow.visible = false;
+  path.group.visible = false;
   markers.clear();
   collectibles.clear();
+  heart.manual = null;
   if (sim.world) {
     scene.remove(sim.world.group);
     sim.world = null;
@@ -303,6 +305,7 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   map.reset();
   for (const seed of seeds) map.seedGround(seed.x, floorY, seed.z, 1);
   path.setRoute(points, floorY);
+  path.group.visible = true;
   collectibles.layout(path.length);
   hud.showScore(0, 0);
   partner.reset(runnerS);
