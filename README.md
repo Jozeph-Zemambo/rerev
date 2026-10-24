@@ -13,6 +13,7 @@ npm run dev
 
 Open http://localhost:5173. Without AR, the app runs a **preview simulation**: a simulated runner, depth camera, GPS and compass.
 - **Quick start here:** a course with a crate on the path (watch it bend around), a ramp, stairs, and a barrier.
+- **Laps right here:** a small oval that fits in a room, with a bag dropped on the far straight. On a phone, this is the one for a judging table.
 - **Plan a run:** a real OpenStreetMap route. The simulated compass starts 20° wrong and GPS jitters by ±4 m, so you can watch the route anchoring correct itself.
 
 ## Run it on an Android phone
@@ -24,6 +25,8 @@ cloudflared tunnel --no-autoupdate --url http://localhost:5173
 ```
 
 Open the printed `https://…trycloudflare.com` link on the phone.
+
+**Testing outdoors?** Add `?debug` to the link, or long-press the "Buddy" tile during a run, for a live readout of what the sensors are doing: tracking, depth points, ground-ray hits, GPS accuracy, compass, how many GPS and route matches the route fit is using, and how far you are from the drawn path.
 
 ## Heart rate from a Galaxy Watch
 
@@ -51,10 +54,11 @@ flowchart LR
   OSM[OpenStreetMap foot routing<br/>+ Open-Meteo elevation] --> Phone
 ```
 
-- **Ground and obstacles** (`src/world/surfaceMap.ts`): depth points become 3D positions in the room and are judged by their height above the *local* ground. That way slopes are followed, things sticking up 15 cm+ are obstacles, and drop-offs are flagged. Hazards are remembered while out of view and cleared once bare floor is seen there again.
+- **Ground and obstacles** (`src/world/surfaceMap.ts`): depth points become 3D positions in the room and are judged by their height above the *local* ground. That way slopes are followed, things sticking up 15 cm+ are obstacles, and drop-offs are flagged. Thresholds widen with distance, since depth gets noisier further out. On map routes, kerbs (up to 20 cm) are stepped over rather than avoided. Hazards are remembered while out of view and cleared once bare floor is seen there again.
 - **Path** (`src/world/path.ts`): drapes onto learned ground, side-steps blocked stretches (±0.6 / 0.9 / 1.2 m), and turns red with no way around. It recognises stairs going up from a steadily rising height profile and climbs them; steps going down stop with a warning.
-- **Route anchoring** (`src/geo/alignment.ts`): one GPS fix plus the compass places the route, then a weighted best-fit of the GPS track against AR tracking keeps refining it. In simulation it converges to under a metre after about 80 m, from a 25° compass error.
-- **Coach** (`src/partner/coach.ts`): plain rules on heart rate. Above the zone it eases off, then takes a breather and resumes on recovery; below the zone it picks up the pace.
+- **Route anchoring** (`src/geo/alignment.ts`, `src/run/routeRun.ts`): the route starts at your feet, pointed by the compass. In the first few metres, before GPS can say much, "you're on the route here" matches (sideways only) fix the compass heading. After that, a weighted fit of the GPS track against AR tracking keeps it glued on. Progress along the route uses your direction of travel, so out-and-back streets don't confuse it. `npm run bench:align` simulates 40 runs per route with a 20° compass error and ±4 m GPS, for a runner on the pavement and one following the drawn line. The drawn route ends up about 0.5 m from the real one, and route matching never does worse than GPS alone.
+- **Callouts** (`src/run/callouts.ts`): the buddy calls turns about 30 m before them ("Left onto Richard Rd, then bear right"), plus kilometre splits, halfway and the final stretch.
+- **Coach** (`src/partner/coach.ts`): plain rules on heart rate. Above the zone it eases off, then takes a breather and resumes on recovery; below the zone it picks up the pace. The summary shows how much of the run you spent in your zone, with a heart-rate chart.
 
 ## Stack
 
