@@ -95,10 +95,10 @@ export class Planner {
 
   private createMap() {
     this.map = L.map('map', { zoomControl: false, attributionControl: true }).setView([this.start.lat, this.start.lon], 15);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    // OpenStreetMap's own tiles (CARTO's now need an API key). Warmed up in CSS to match the app.
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      subdomains: 'abcd',
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(this.map);
     this.youMarker = L.marker([this.start.lat, this.start.lon], { icon: pin('you') }).addTo(this.map);
     this.map.on('click', event => {
