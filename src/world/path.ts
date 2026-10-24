@@ -35,6 +35,9 @@ export type PathStatus = {
 
 export type RoutePoint = { x: number; z: number };
 
+/** A recognised staircase: where it starts and ends along the route, and its bottom and top heights. */
+export type StairSpan = { fromS: number; toS: number; fromY: number; toY: number };
+
 /**
  * The route laid over the real ground. Holds the planned line (from a demo shape or a real
  * map route), drapes it onto the ground heights learned by the SurfaceMap, bends it sideways
@@ -44,6 +47,8 @@ export class Path {
   readonly group = new THREE.Group();
   length = 0;
   readonly status: PathStatus = { blockedAtS: null, blockReason: null, detouring: false, seenUntilS: 0 };
+  /** Staircases found along this route. Kept when the route is only re-anchored. */
+  stairs: StairSpan[] = [];
 
   private count = 0;
   private xs = new Float32Array(0);
@@ -77,8 +82,12 @@ export class Path {
     this.group.add(this.dashes);
   }
 
-  /** Lay a new route. Points are in AR/world metres; `baseY` is the starting floor height. */
-  setRoute(points: RoutePoint[], baseY: number) {
+  /**
+   * Lay a route. Points are in AR/world metres; `baseY` is the starting floor height. Pass
+   * `reanchor` when the same route has only been shifted, to keep what was learned along it.
+   */
+  setRoute(points: RoutePoint[], baseY: number, reanchor = false) {
+    if (!reanchor) this.stairs = [];
     const resampled = resample(points, STEP);
     this.count = resampled.length;
     this.length = (this.count - 1) * STEP;
@@ -188,10 +197,17 @@ export class Path {
   private drape(i0: number, i1: number, map: SurfaceMap, dt: number) {
     let carry = this.yTarget[i0];
     for (let i = i0; i <= i1; i++) {
-      const x = this.xs[i] + this.nx[i] * this.offset[i];
-      const z = this.zs[i] + this.nz[i] * this.offset[i];
-      const ground = map.groundAt(x, z);
-      if (ground !== null) carry = ground;
+      const s = i * STEP;
+      const stairs = this.stairs.find(span => s >= span.fromS && s <= span.toS);
+      if (stairs) {
+        // Climb a staircase as a straight incline from its bottom to its top.
+        carry = stairs.fromY + ((stairs.toY - stairs.fromY) * (s - stairs.fromS)) / Math.max(0.1, stairs.toS - stairs.fromS);
+      } else {
+        const x = this.xs[i] + this.nx[i] * this.offset[i];
+        const z = this.zs[i] + this.nz[i] * this.offset[i];
+        const ground = map.groundAt(x, z);
+        if (ground !== null) carry = ground;
+      }
       this.yTarget[i] = carry;
     }
     // Forward then backward smoothing over roughly half a metre.
@@ -214,7 +230,7 @@ export class Path {
     for (let i = start; i <= end; i++) {
       const x = this.xs[i] + this.nx[i] * this.offset[i];
       const z = this.zs[i] + this.nz[i] * this.offset[i];
-      if (map.groundAt(x, z) !== null) {
+      if (map.groundAt(x, z) !== null || this.stairsAt(i * STEP)) {
         gap = 0;
         lastSeen = i;
       } else if (++gap > allowedGap) break;
@@ -223,7 +239,11 @@ export class Path {
   }
 
   private hazardAtOffset(i: number, side: number, map: SurfaceMap, now: number): Hazard | null {
-    return map.hazardAt(this.xs[i] + this.nx[i] * side, this.zs[i] + this.nz[i] * side, CORRIDOR, now);
+    const hazard = map.hazardAt(this.xs[i] + this.nx[i] * side, this.zs[i] + this.nz[i] * side, CORRIDOR, now);
+    // Just past the top of known stairs, the steps below look like a drop. They're the stairs.
+    const s = i * STEP;
+    if (hazard === 'drop' && this.stairs.some(span => s > span.toS && s <= span.toS + 0.8)) return null;
+    return hazard;
   }
 
   /** Find blocked stretches ahead and try to side-step each one; otherwise mark it blocked. */
@@ -241,18 +261,28 @@ export class Path {
 
     let i = a;
     while (i <= b) {
-      const hazard = this.hazardAtOffset(i, 0, map, now);
-      if (!hazard) {
+      // Recognised stairs are passable, and their landing gets learned as ground.
+      const onStairs = this.stairsAt(i * STEP) !== undefined;
+      const hazard = onStairs ? null : this.hazardAtOffset(i, 0, map, now);
+      if (!hazard || this.claimLanding(i, map, now)) {
         i++;
         continue;
       }
       let end = i;
       let worst: Hazard = hazard;
       while (end + 1 <= b) {
-        const next = this.hazardAtOffset(end + 1, 0, map, now);
+        const next = this.stairsAt((end + 1) * STEP) ? null : this.hazardAtOffset(end + 1, 0, map, now);
         if (!next) break;
         if (next === 'obstacle') worst = 'obstacle';
         end++;
+      }
+      if (worst === 'obstacle') {
+        const stairs = this.detectStairs(i, map, now);
+        if (stairs) {
+          this.markStairs(stairs);
+          i = this.index(stairs.toS) + 1;
+          continue;
+        }
       }
       const preferred = Math.sign(previous[Math.min(previous.length - 1, i - a)] || 0) || 1;
       const side = this.findClearSide(i - margin, end + margin, preferred, map, now);
@@ -272,6 +302,74 @@ export class Path {
       }
       i = end + 1;
     }
+  }
+
+  /**
+   * Does the blocked stretch starting at sample i0 look like stairs going up? Reads obstacle
+   * tops along the line. Stairs rise steadily: tops never drop by more than a few cm, keep
+   * climbing over at least half a metre of path, reach 25 cm–1.5 m, at a stair-like slope.
+   * A box (flat top), a wall (one tall face) or a drop does not match.
+   *
+   * Individual steps are not required to show up: map cells (20 cm) don't line up with treads
+   * (25–35 cm), so a cell's top often reads as the higher of two neighbouring steps.
+   */
+  private detectStairs(i0: number, map: SurfaceMap, now: number): StairSpan | null {
+    const base = this.ys[Math.max(0, i0 - 3)];
+    const tops: { k: number; h: number }[] = [];
+    for (let k = 0; k < 45 && i0 + k < this.count; k++) {
+      const top = map.obstacleTopAt(this.xs[i0 + k], this.zs[i0 + k], now);
+      if (top === null) continue;
+      const h = top - base;
+      const previous = tops.at(-1);
+      // A sudden tall jump (a wall or railing on the landing) or a drop ends the staircase.
+      if (previous && (h - previous.h > 0.35 || h < previous.h - 0.06)) break;
+      tops.push({ k, h: Math.max(h, previous?.h ?? h) });
+    }
+    if (tops.length < 4) return null;
+    const first = tops[0];
+    const highest = tops.reduce((best, t) => (t.h > best.h + 0.02 ? t : best), first);
+    const run = (highest.k - first.k) * STEP;
+    const slope = run > 0 ? (highest.h - first.h) / run : 0;
+    const isStairs = run >= 0.5 && highest.h >= 0.25 && highest.h <= 1.5 && first.h <= 0.45 && slope >= 0.15 && slope <= 1.2;
+    return isStairs ? { fromS: i0 * STEP, toS: (i0 + highest.k) * STEP, fromY: base, toY: base + highest.h } : null;
+  }
+
+  /** Remember a staircase and turn its treads into ground so the path can climb it. */
+  /**
+   * Remember a staircase. Its cells are left as they are (a 20 cm grid can't hold 30 cm treads
+   * faithfully); instead the path climbs it as a straight incline and hazards on it are ignored.
+   */
+  private markStairs(span: StairSpan) {
+    const overlapping = this.stairs.find(s => span.fromS <= s.toS + 0.3 && span.toS >= s.fromS - 0.3);
+    if (!overlapping) {
+      this.stairs.push({ ...span });
+      return;
+    }
+    overlapping.fromS = Math.min(overlapping.fromS, span.fromS);
+    overlapping.toY = Math.max(overlapping.toY, span.toY);
+    overlapping.toS = Math.max(overlapping.toS, span.toS);
+  }
+
+  private stairsAt(s: number): StairSpan | undefined {
+    return this.stairs.find(span => s >= span.fromS - 0.3 && s <= span.toS + 0.1);
+  }
+
+  /** True if `s` is on, or just before, a recognised staircase. */
+  onStairs(s: number): boolean {
+    return this.stairs.some(span => s >= span.fromS - 0.6 && s <= span.toS + 0.2);
+  }
+
+  /**
+   * Just past the top of a staircase, flat obstacle cells at the staircase's top height are the
+   * landing, not an obstacle: make them ground so ground knowledge can spread across it.
+   */
+  private claimLanding(i: number, map: SurfaceMap, now: number): boolean {
+    const s = i * STEP;
+    const span = this.stairs.find(st => s > st.toS && s <= st.toS + 3);
+    if (!span) return false;
+    // Check the whole corridor, not just the centre line: the hazard may be a cell beside it.
+    map.promoteToGround(this.xs[i], this.zs[i], CORRIDOR + 0.1, now, { y: span.toY, tolerance: 0.1 });
+    return this.hazardAtOffset(i, 0, map, now) === null;
   }
 
   private findClearSide(from: number, to: number, preferred: number, map: SurfaceMap, now: number): number | null {

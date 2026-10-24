@@ -46,6 +46,8 @@ type Cell = {
   floorSeenAt: number;
   obstacle: Vote;
   drop: Vote;
+  /** Upper envelope of obstacle points in this cell (absolute height), e.g. a stair tread. */
+  top: number;
 };
 
 const hazardActive = (vote: Vote, floorSeenAt: number, now: number) =>
@@ -140,6 +142,42 @@ export class SurfaceMap {
     const cell = this.cell(cellIndex(x), cellIndex(z));
     if (cell.groundWeight === 0) cell.ground = reference;
     vote(isObstacle ? cell.obstacle : cell.drop, isObstacle ? OBSTACLE_VOTES : DROP_VOTES, cell.floorSeenAt, now);
+    if (isObstacle) {
+      // Rise quickly to new highs, sink slowly, so the top follows the surface, not stray spikes.
+      if (cell.obstacle.count === 1) cell.top = y;
+      else cell.top += (y - cell.top) * (y > cell.top ? 0.5 : 0.05);
+    }
+  }
+
+  /**
+   * Turn obstacle cells near a point into walkable ground at their top height. Used once a
+   * staircase is recognised: the treads become ground, so knowledge of the ground can carry on
+   * up the steps and onto the landing.
+   */
+  promoteToGround(x: number, z: number, radius: number, now: number, onlyNear?: { y: number; tolerance: number }): number {
+    const r = Math.ceil(radius / CELL_SIZE);
+    const cx = cellIndex(x);
+    const cz = cellIndex(z);
+    let promoted = 0;
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dz = -r; dz <= r; dz++) {
+        const cell = this.cells.get(keyOf(cx + dx, cz + dz));
+        if (!cell || !this.isObstacle(cell, now)) continue;
+        if (onlyNear && Math.abs(cell.top - onlyNear.y) > onlyNear.tolerance) continue;
+        promoted++;
+        cell.ground = cell.top;
+        cell.groundWeight = Math.max(cell.groundWeight, 3);
+        cell.obstacle = { count: 0, at: -Infinity, confirmed: false };
+        cell.floorSeenAt = now;
+      }
+    }
+    return promoted;
+  }
+
+  /** Height of the top of an obstacle at a point (absolute), or null if nothing is there now. */
+  obstacleTopAt(x: number, z: number, now: number): number | null {
+    const cell = this.cells.get(keyOf(cellIndex(x), cellIndex(z)));
+    return cell && this.isObstacle(cell, now) ? cell.top : null;
   }
 
   /** The worst hazard within `radius` of a point right now, or null if the way looks clear. */
@@ -194,6 +232,7 @@ export class SurfaceMap {
         floorSeenAt: -Infinity,
         obstacle: { count: 0, at: -Infinity, confirmed: false },
         drop: { count: 0, at: -Infinity, confirmed: false },
+        top: 0,
       };
       this.cells.set(key, cell);
     }

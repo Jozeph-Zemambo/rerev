@@ -331,7 +331,7 @@ gps.onFix(fix => {
 function relayRoute() {
   if (!routeRun) return;
   const floor = path.pointAt(partner.s, new THREE.Vector3()).y;
-  path.setRoute(routeRun.arPoints(), floor);
+  path.setRoute(routeRun.arPoints(), floor, true);
 }
 
 // ---------------------------------------------------------------- AR session
@@ -500,6 +500,8 @@ function stateMessage(state: PartnerState): string {
   switch (state) {
     case 'run':
       return path.status.detouring ? "Something's on the path. Follow me around it!" : 'Running with you. Keep it steady!';
+    case 'stairs':
+      return 'Stairs! Taking them nice and easy.';
     case 'look':
       return "Point your phone ahead so I can see where we're going.";
     case 'wait':
@@ -523,6 +525,8 @@ function announce() {
       speak({ text: drop ? "Careful! There's a drop ahead." : "Whoa, something's blocking the way.", mood: 'care' }, true);
     } else if (partner.state === 'done') {
       speak({ text: 'We made it! Great run.', mood: 'cheer' }, true);
+    } else if (partner.state === 'stairs' && lastState !== 'wait') {
+      speak({ text: "Stairs ahead! Let's take them easy.", mood: 'care' }, true);
     }
     lastState = partner.state;
   }
@@ -594,7 +598,7 @@ renderer.setAnimationLoop((time, frame) => {
     path.tangentAt(partner.s, tangent);
     mascot.root.position.copy(point);
     // Faces down the path while running or looking ahead; turns to face you otherwise.
-    const facing = partner.state === 'run' || partner.state === 'look' ? Math.atan2(tangent.x, tangent.z) : Math.atan2(-tangent.x, -tangent.z);
+    const facing = partner.state === 'run' || partner.state === 'look' || partner.state === 'stairs' ? Math.atan2(tangent.x, tangent.z) : Math.atan2(-tangent.x, -tangent.z);
     const turn = Math.atan2(Math.sin(facing - mascot.root.rotation.y), Math.cos(facing - mascot.root.rotation.y));
     mascot.root.rotation.y += turn * Math.min(1, dt * 5);
     mascot.update(dt, seconds, partner.gait);

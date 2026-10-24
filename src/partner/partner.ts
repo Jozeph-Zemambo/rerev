@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import type { Path } from '../world/path';
 import type { Gait } from './mascot';
 
-export type PartnerState = 'run' | 'look' | 'wait' | 'break' | 'blocked' | 'done';
+export type PartnerState = 'run' | 'stairs' | 'look' | 'wait' | 'break' | 'blocked' | 'done';
+
+/** On stairs the buddy slows to a careful walk at this fraction of the goal pace. */
+const STAIRS_PACE = 0.45;
 
 const START_LEAD = 1.5;
 const MIN_PACE = 0.6;
@@ -38,7 +41,7 @@ export class Partner {
   get gait(): Gait {
     return {
       speed: this.speed,
-      inPlace: this.state !== 'run' && !(this.state === 'look' && this.speed > 0.3),
+      inPlace: this.state !== 'run' && this.state !== 'stairs' && !(this.state === 'look' && this.speed > 0.3),
       grade: this.path.ready ? this.path.gradeAt(this.s) : 0,
     };
   }
@@ -74,8 +77,9 @@ export class Partner {
 
     if (this.s >= end) this.state = 'done';
     else if (this.onBreak) this.state = 'break';
-    else if (blockedAt !== null && blockedAt - this.s < STOP_SHORT) this.state = 'blocked';
+    else if (blockedAt !== null && blockedAt - this.s < STOP_SHORT + 0.05) this.state = 'blocked';
     else if (this.state === 'wait' ? lead > this.targetLead : lead > this.maxLead) this.state = 'wait';
+    else if (this.path.onStairs(this.s + 0.3)) this.state = 'stairs';
     else if (this.s >= seenLimit - 0.05) this.state = 'look';
     else this.state = 'run';
 
@@ -84,7 +88,8 @@ export class Partner {
     const hill = THREE.MathUtils.clamp(1 - grade * 3, 0.6, 1.1);
     // If you catch up, it picks up the pace a little so it stays your partner, not your shadow.
     const moving = this.state === 'run' || this.state === 'look';
-    const target = moving ? this.goalPace * this.effort * hill * (lead < 1 ? 1.25 : 1) : 0;
+    const target =
+      this.state === 'stairs' ? this.goalPace * STAIRS_PACE : moving ? this.goalPace * this.effort * hill * (lead < 1 ? 1.25 : 1) : 0;
     this.speed += (target - this.speed) * Math.min(1, dt * 3);
     let next = this.s + this.speed * dt;
     if (blockedAt !== null) next = Math.min(next, Math.max(this.s, blockedAt - STOP_SHORT));

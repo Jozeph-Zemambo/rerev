@@ -19,7 +19,8 @@ export class PreviewWorld {
     { x: -6, z: -13 },
     { x: -6, z: -26 },
     { x: -2, z: -30 },
-    { x: 4, z: -30 },
+    { x: 6, z: -30 },
+    { x: 6, z: -44 },
   ];
   private readonly solids: THREE.Mesh[] = [];
   private readonly raycaster = new THREE.Raycaster();
@@ -56,9 +57,21 @@ export class PreviewWorld {
     crate.position.set(0.15, 0.225, -5.5);
     this.add(crate);
 
-    // A barrier too wide to step around, near the end of the route.
-    const barrier = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.9, 5), concrete);
-    barrier.position.set(1.5, 0.45, -30);
+    // Four steps up (17 cm risers, 30 cm treads) onto a landing, on the last straight.
+    const RISE = 0.17;
+    const TREAD = 0.3;
+    for (let k = 1; k <= 4; k++) {
+      const step = new THREE.Mesh(new THREE.BoxGeometry(2, RISE * k, TREAD), concrete);
+      step.position.set(6, (RISE * k) / 2, -33 - TREAD * (k - 0.5));
+      this.add(step);
+    }
+    const landing = new THREE.Mesh(new THREE.BoxGeometry(2, RISE * 4, 5.8), concrete);
+    landing.position.set(6, RISE * 2, -34.2 - 2.9);
+    this.add(landing);
+
+    // A barrier too wide to step around, up on the landing.
+    const barrier = new THREE.Mesh(new THREE.BoxGeometry(5, 0.9, 0.3), wood);
+    barrier.position.set(6, RISE * 4 + 0.45, -39);
     this.add(barrier);
   }
 
