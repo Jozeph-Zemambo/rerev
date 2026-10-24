@@ -316,6 +316,10 @@ button.stat { pointer-events: auto; }
   box-shadow: 0 3px 0 #e08e22;
 }
 #controls button.secondary { background: var(--glass); color: var(--glass-ink); box-shadow: none; }
+#controls button.talk { display: inline-flex; align-items: center; gap: 6px; background: var(--paper); color: var(--ink); box-shadow: 0 3px 0 var(--line); }
+#controls button.talk.listening { background: var(--coral); color: #fff; box-shadow: 0 3px 0 #d4513d; animation: listening 1s ease-in-out infinite; }
+@keyframes listening { 50% { transform: scale(1.06); } }
+@media (prefers-reduced-motion: reduce) { #controls button.talk.listening { animation: none; } }
 
 @media (prefers-reduced-motion: reduce) {
   .card-button, .big-button { transition: none; }

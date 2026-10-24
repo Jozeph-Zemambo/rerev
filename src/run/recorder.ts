@@ -48,6 +48,10 @@ export class RunRecorder {
     this.client = client;
   }
 
+  get distanceSoFar() {
+    return this.distance;
+  }
+
   start(now: number, details: { kind: 'quick' | 'route'; goalPaceSecPerKm: number; zone: { low: number; high: number }; routeDistance?: number }) {
     Object.assign(this, { pace: 0, stars: 0, coins: 0, distance: 0, hrSum: 0, hrCount: 0, hrMax: 0, breaks: 0, wasBreaking: false });
     this.startedAt = now;

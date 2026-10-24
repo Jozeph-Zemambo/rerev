@@ -6,7 +6,7 @@ import { convex } from './convexClient';
 import { apply, arBearing } from './geo/alignment';
 import { Compass, Gps, type Fix } from './geo/sensors';
 import { HeartRateFeed } from './heart/heartRateFeed';
-import { Hud } from './hud';
+import { formatPace, Hud } from './hud';
 import { Coach, type CoachLine } from './partner/coach';
 import { Mascot } from './partner/mascot';
 import { Partner, type PartnerState } from './partner/partner';
@@ -17,6 +17,8 @@ import { Planner, type RunGoal } from './ui/planner';
 import { SpeechBubble } from './ui/speechBubble';
 import { showRecentRuns, SummaryScreen } from './ui/summary';
 import { BrowserVoice } from './ui/voice';
+import { VoiceCommands, type Intent } from './ui/voiceCommands';
+import { formatDistance } from './ui/summary';
 import { Sounds } from './ui/sounds';
 import { Collectibles } from './world/collectibles';
 import { HazardMarkers } from './world/hazardMarkers';
@@ -104,6 +106,7 @@ let hitTestSource: XRHitTestSource | null = null;
 let depthEnabled = false;
 let sensorClock = 0;
 let runStartedAt = 0;
+let messageHoldUntil = 0;
 let lastState: PartnerState | null = null;
 let wasDetouring = false;
 
@@ -131,11 +134,7 @@ planner.onBack = () => {
 };
 planner.onStart = goal => void startRun({ kind: 'route', goal });
 
-hud.breakButton.onclick = () => {
-  partner.setBreak(!partner.breaking);
-  coach.autoBreak = false;
-  speak({ text: partner.breaking ? 'Sure, breather time. Jog on the spot with me.' : "Alright, let's go!", mood: 'cheer' }, true);
-};
+hud.breakButton.onclick = () => respond(partner.breaking ? 'go' : 'break');
 hud.hrStat.onclick = () => {
   hud.hrPanel.hidden = !hud.hrPanel.hidden;
   if (!hud.hrPanel.hidden) heart.manual = Number(hud.hrManual.value);
@@ -148,6 +147,55 @@ hud.hrAuto.onclick = () => {
   heart.manual = null;
   hud.hrPanel.hidden = true;
 };
+
+const commands = new VoiceCommands();
+const talkButton = byId<HTMLButtonElement>('btn-talk');
+talkButton.hidden = !commands.supported;
+talkButton.onclick = () => commands.toggle();
+commands.onState = (listening, error) => {
+  talkButton.classList.toggle('listening', listening);
+  talkButton.querySelector('span')!.textContent = listening ? 'Listening…' : 'Talk';
+  if (error) hud.say(error);
+};
+commands.onHeard = (transcript, intent) => {
+  hud.say(`You said: "${transcript}"`);
+  messageHoldUntil = performance.now() / 1000 + 3;
+  respond(intent);
+};
+
+/** What the buddy does when you talk to it. */
+function respond(intent: Intent) {
+  switch (intent) {
+    case 'break':
+      partner.setBreak(true);
+      coach.autoBreak = false;
+      return speak({ text: 'Sure, breather time. Jog on the spot with me.', mood: 'care' }, true);
+    case 'go':
+      if (!partner.breaking) return speak({ text: "I'm right here. Let's keep it up!", mood: 'cheer' });
+      partner.setBreak(false);
+      coach.autoBreak = false;
+      return speak({ text: "Alright, let's go!", mood: 'cheer' }, true);
+    case 'faster':
+      partner.nudgePace(0.3);
+      return speak({ text: 'Picking it up!', mood: 'cheer' });
+    case 'slower':
+      partner.nudgePace(-0.3);
+      return speak({ text: 'Easing off. Nice and steady.', mood: 'care' });
+    case 'status': {
+      const bpm = heart.bpm;
+      const parts = [`${formatDistance(recorder.distanceSoFar)} so far`];
+      if (recorder.pace > 0.3) parts.push(`${formatPace(recorder.pace).replace(':', ' ')} pace`);
+      if (bpm) parts.push(`heart at ${Math.round(bpm)}`);
+      return speak({ text: `${parts.join(', ')}. You're doing great!`, mood: 'info' });
+    }
+    case 'finish':
+      speak({ text: 'Great run! Wrapping up.', mood: 'cheer' }, true);
+      setTimeout(() => void finishRun(), 1500);
+      return;
+    case 'unknown':
+      return speak({ text: "Sorry, I didn't catch that. Try \"take a break\" or \"let's go\".", mood: 'info' });
+  }
+}
 
 /** The buddy says something: speech bubble over its head plus the voice. */
 function speak(line: CoachLine, interrupt = false) {
@@ -561,7 +609,7 @@ renderer.setAnimationLoop((time, frame) => {
       paceMetersPerSecond: recorder.pace,
       leadMeters: Math.max(0, partner.s - runnerS),
     });
-    hud.say(stateMessage(partner.state));
+    if (now >= messageHoldUntil) hud.say(stateMessage(partner.state));
     const breakLabel = partner.breaking ? "Let's go" : 'Take a break';
     if (hud.breakButton.textContent !== breakLabel) hud.breakButton.textContent = breakLabel;
     bubble.update(point, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera, now);
@@ -577,7 +625,7 @@ addEventListener('resize', () => {
 });
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { rerev: { path, partner, map, camera, sim, coach, heart, getRouteRun: () => routeRun } });
+  Object.assign(window, { rerev: { path, partner, map, camera, sim, coach, heart, commands, recorder, getRouteRun: () => routeRun } });
 }
 
 void (async () => {
