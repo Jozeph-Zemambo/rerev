@@ -18,6 +18,8 @@ test('voice commands map to the right intent', () => {
     ["I'm done", 'finish'],
     ['how am I doing?', 'status'],
     ["what's my heart rate", 'status'],
+    // Soft, not a command: worth a question first (see conversation.test.ts).
+    ["I'm tired", 'unknown'],
     ['nice weather today', 'unknown'],
   ];
   for (const [said, intent] of cases) assert.equal(parseIntent(said), intent, said);

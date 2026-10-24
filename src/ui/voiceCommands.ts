@@ -2,14 +2,15 @@ export type Intent = 'break' | 'go' | 'faster' | 'slower' | 'status' | 'finish' 
 
 /**
  * Checked in order: "go faster" is about speed, not starting; "don't stop" must not read as
- * "stop"; "stop the run" means finish rather than take a break.
+ * "stop"; "stop the run" means finish rather than take a break. Only clear commands live
+ * here; softer things like "I'm tired" deserve a question first (see `voice/conversation.ts`).
  */
 const RULES: [Intent, RegExp][] = [
   ['faster', /\b(faster|speed (it )?up|pick (it|the pace)? ?up|quicker|push)\b/],
   ['slower', /\b(slower|slow (it )?down|easy|ease (it )?(off|up)|too fast|chill)\b/],
   ['go', /\b(don'?t stop|keep (going|running)|let'?s go|go( again)?|continue|resume|ready|start again|carry on|i'?m good|back on)\b/],
   ['finish', /\b(finish|end (the )?run|i'?m done|we'?re done|stop the run)\b/],
-  ['break', /\b(break|breather|rest|tired|stop|wait|pause|hold on|need a (sec|second|minute)|can'?t breathe|exhausted)\b/],
+  ['break', /\b(break|breather|rest|stop|wait|pause|hold on|need a (sec|second|minute)|can'?t breathe)\b/],
   ['status', /\b(how (am i|are we) doing|how far|how long|status|my heart|heart rate|pace)\b/],
 ];
 
