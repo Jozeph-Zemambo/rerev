@@ -1,7 +1,8 @@
 import type { ConvexClient } from 'convex/browser';
 import { api } from '../../convex/_generated/api';
 import { formatSecondsPerKm } from '../hud';
-import type { RunSummary } from '../run/recorder';
+import type { RunSummary, TracePoint } from '../run/recorder';
+import { drawHeartChart, timeInZone, type Zone } from './heartChart';
 
 const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -27,7 +28,7 @@ export class SummaryScreen {
     };
   }
 
-  show(summary: RunSummary) {
+  show(summary: RunSummary, trace: readonly TracePoint[] = [], zone?: Zone) {
     const set = (id: string, text: string) => (byId(id).textContent = text);
     set('summary-title', summary.distance < 30 ? 'Good warm-up!' : summary.breaks === 0 ? 'Nonstop. Nice!' : 'Nice run!');
     set('sum-distance', formatDistance(summary.distance));
@@ -38,6 +39,13 @@ export class SummaryScreen {
     set('sum-breaks', String(summary.breaks));
     set('sum-stars', String(summary.stars));
     set('sum-coins', String(summary.coins));
+    const inZone = zone ? timeInZone(trace, zone) : null;
+    byId('sum-zone').hidden = inZone === null;
+    if (zone && inZone !== null) {
+      set('sum-zone-pct', `${Math.round(inZone * 100)}%`);
+      set('sum-zone-range', `(${zone.low}–${zone.high} bpm)`);
+      drawHeartChart(byId('sum-chart'), trace, zone);
+    }
     this.screen.hidden = false;
   }
 }

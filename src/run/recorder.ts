@@ -21,6 +21,9 @@ export type RunSummary = {
 
 type Sample = { t: number; distance: number; pace: number; hr?: number };
 
+/** One point a second for the end-of-run chart (kept on the phone, not uploaded). */
+export type TracePoint = { t: number; hr: number | null; pace: number; breaking: boolean };
+
 /**
  * Tracks the runner's own progress (distance, smoothed pace, heart rate, breaks) and saves it
  * to Convex as the run goes. Works offline too: without a connection it still produces the
@@ -39,6 +42,7 @@ export class RunRecorder {
   private lastUpdate = 0;
   private history: { t: number; s: number }[] = [];
   private pending: Sample[] = [];
+  private points: TracePoint[] = [];
   private lastSample = 0;
   private lastFlush = 0;
   private hrSum = 0;
@@ -55,6 +59,11 @@ export class RunRecorder {
     return this.distance;
   }
 
+  /** The run so far, one point a second. */
+  get trace(): readonly TracePoint[] {
+    return this.points;
+  }
+
   start(now: number, details: { kind: 'quick' | 'route'; goalPaceSecPerKm: number; zone: { low: number; high: number }; routeDistance?: number }) {
     Object.assign(this, { pace: 0, stars: 0, coins: 0, distance: 0, hrSum: 0, hrCount: 0, hrMax: 0, breaks: 0, wasBreaking: false });
     this.startedAt = now;
@@ -63,6 +72,7 @@ export class RunRecorder {
     this.lastUpdate = now;
     this.history = [];
     this.pending = [];
+    this.points = [];
     this.runId = null;
     this.client
       ?.mutation(api.runs.start, {
@@ -94,6 +104,8 @@ export class RunRecorder {
       this.hrCount++;
       this.hrMax = Math.max(this.hrMax, bpm);
     }
+    const t = now - this.startedAt;
+    if (t - (this.points.at(-1)?.t ?? -1) >= 1) this.points.push({ t, hr: bpm, pace: this.pace, breaking });
     if (breaking && !this.wasBreaking) this.breaks++;
     this.wasBreaking = breaking;
 

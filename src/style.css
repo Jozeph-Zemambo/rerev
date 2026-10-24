@@ -84,6 +84,24 @@ button:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
 
 /* Summary */
 .summary-title { margin: 0 0 8px; font-family: var(--display); font-weight: 800; font-size: 48px; line-height: 1; }
+#summary .home-inner { overflow-y: auto; padding-top: 28px; gap: 10px; }
+.zone-card { background: var(--paper); border-radius: 16px; padding: 12px 14px 10px; margin: 0 0 12px; box-shadow: 0 3px 0 var(--line); position: relative; }
+.zone-hero { margin: 0 0 6px; display: flex; align-items: baseline; gap: 10px; }
+.zone-hero b { font-family: var(--display); font-weight: 800; font-size: 40px; line-height: 1; font-variant-numeric: tabular-nums; }
+.zone-hero span { font-weight: 700; color: var(--ink-soft); line-height: 1.25; }
+.zone-hero small { font-weight: 700; white-space: nowrap; }
+.hr-chart { position: relative; }
+.hr-chart-svg { display: block; width: 100%; height: auto; touch-action: none; overflow: visible; }
+.hr-zone { fill: #2bb3a3; fill-opacity: 0.16; }
+.hr-break { fill: #ffb347; fill-opacity: 0.28; }
+.hr-grid { stroke: #2bb3a3; stroke-opacity: 0.45; stroke-width: 1; }
+.hr-axis { stroke: var(--line); stroke-width: 1; }
+.hr-line { fill: none; stroke: #e0533d; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.hr-cross { stroke: var(--ink-soft); stroke-width: 1; }
+.hr-dot { fill: #e0533d; stroke: var(--paper); stroke-width: 2; }
+.hr-tick { font: 700 10px var(--body, system-ui); fill: var(--ink-soft); }
+.hr-tick.end { text-anchor: end; }
+.hr-tip { position: absolute; top: -6px; transform: translate(-50%, -100%); background: var(--ink); color: var(--paper); font-weight: 700; font-size: 12px; padding: 4px 8px; border-radius: 8px; white-space: nowrap; pointer-events: none; }
 .summary-grid { margin: 0 0 12px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .summary-grid > div { background: var(--paper); border-radius: 16px; padding: 12px 14px; box-shadow: 0 3px 0 var(--line); }
 .summary-grid > div.gold { background: #fff0c8; box-shadow: 0 3px 0 #f2d48a; }

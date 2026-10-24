@@ -321,7 +321,7 @@ function endRun() {
   showRunUi(false);
   if (summary) {
     homeScreen.hidden = true;
-    summaryScreen.show(summary);
+    summaryScreen.show(summary, recorder.trace, coach.zone);
   }
 }
 
