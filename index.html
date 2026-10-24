@@ -4,21 +4,84 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#fff3e2" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Nunito:wght@500;700;800&display=swap" />
     <title>ReReV</title>
   </head>
   <body>
-    <div id="overlay">
+    <section id="home" class="screen">
+      <div class="home-inner">
+        <p class="eyebrow">Your AR running buddy</p>
+        <h1 class="logo">Re<span>Re</span>V</h1>
+        <p class="tagline">Revitalise your run. Buddy paces you, reads your heart, and finds the way around whatever's in it.</p>
+        <button id="go-plan" class="card-button" type="button">
+          <span class="card-title">Plan a run</span>
+          <span class="card-sub">Pick a loop or a spot on the map</span>
+        </button>
+        <button id="go-indoor" class="card-button alt" type="button">
+          <span class="card-title">Quick start here</span>
+          <span class="card-sub">A short path right in front of you</span>
+        </button>
+      </div>
+    </section>
+
+    <section id="planner" class="screen" hidden>
+      <div id="map"></div>
+      <header class="planner-top">
+        <button id="planner-back" class="round" type="button" aria-label="Back">←</button>
+        <h2>Plan your run</h2>
+      </header>
+      <div class="sheet">
+        <div class="segmented" role="group" aria-label="Route type">
+          <button id="mode-loop" type="button" aria-pressed="true">Loop from here</button>
+          <button id="mode-to" type="button" aria-pressed="false">To a spot</button>
+        </div>
+        <div id="loop-options" class="chips" role="group" aria-label="Loop distance">
+          <button type="button" data-km="1">1 km</button>
+          <button type="button" data-km="2" aria-pressed="true">2 km</button>
+          <button type="button" data-km="3">3 km</button>
+          <button type="button" data-km="5">5 km</button>
+          <button id="loop-shuffle" type="button" class="ghost" aria-label="Try another direction">↻ Shuffle</button>
+        </div>
+        <p id="to-hint" class="hint" hidden>Tap the map where you want to run to.</p>
+        <div class="stats" aria-live="polite">
+          <div><span class="k">Distance</span><span id="plan-distance" class="v">–</span></div>
+          <div><span class="k">Time</span><span id="plan-time" class="v">–</span></div>
+          <div><span class="k">Climb</span><span id="plan-climb" class="v">–</span></div>
+        </div>
+        <p id="plan-status" class="hint">Finding where you are…</p>
+        <label class="field" for="pace">
+          <span>Goal pace</span>
+          <output id="pace-out" for="pace">6:30 /km</output>
+        </label>
+        <input id="pace" type="range" min="240" max="720" step="15" value="390" />
+        <div class="field"><span>Heart-rate zone</span></div>
+        <div id="zone-options" class="chips" role="group" aria-label="Heart-rate zone">
+          <button type="button" data-zone="110-140">Easy 110–140</button>
+          <button type="button" data-zone="130-160" aria-pressed="true">Steady 130–160</button>
+          <button type="button" data-zone="150-180">Push 150–180</button>
+        </div>
+        <button id="start-run" class="big-button" type="button" disabled>Start with Buddy</button>
+      </div>
+    </section>
+
+    <div id="overlay" hidden>
       <div id="topbar">
         <div class="stat"><span class="k">Heart</span><span id="hr" class="v">--</span><span class="u">bpm</span></div>
-        <div class="stat"><span class="k">Pace</span><span id="pace" class="v">--</span><span class="u">min/km</span></div>
+        <div class="stat"><span class="k">Pace</span><span id="pace-live" class="v">--</span><span class="u">min/km</span></div>
         <div class="stat"><span class="k">Buddy</span><span id="lead" class="v">--</span><span class="u">m ahead</span></div>
       </div>
-      <div id="message">Starting up…</div>
-      <div id="controls" hidden>
-        <button id="btn-break" type="button">Take a break</button>
-        <button id="btn-slower" type="button">Slower</button>
-        <button id="btn-faster" type="button">Faster</button>
-        <button id="btn-reset" type="button">New path</button>
+      <div id="turn" hidden><span id="turn-arrow" class="turn-arrow">↑</span><span id="turn-text"></span></div>
+      <div id="bottom">
+        <div id="message">Starting up…</div>
+        <div id="controls" hidden>
+          <button id="btn-break" type="button">Take a break</button>
+          <button id="btn-slower" type="button" class="secondary">Slower</button>
+          <button id="btn-faster" type="button" class="secondary">Faster</button>
+          <button id="btn-reset" type="button" class="secondary">Finish</button>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
