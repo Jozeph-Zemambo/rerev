@@ -10,6 +10,11 @@ const FIXES_PER_REFIT = 3;
 const MAX_ACCURACY = 25;
 /** Show the next turn once it is this close. */
 const TURN_HORIZON = 150;
+/**
+ * Routes are planned from where you stand, so at the start the route's first point is under
+ * your feet. A first GPS fix this close to it is trusted less than that: the path starts at you.
+ */
+const SNAP_TO_START = 40;
 
 export type NextTurn = { modifier: string; street: string; metres: number };
 
@@ -36,7 +41,9 @@ export class RouteRun {
 
   /** Anchor the route using one GPS fix plus the direction the camera faces. */
   begin(fix: LatLon, ar: ArPoint, headingRad: number, arForwardBearing: number) {
-    this.aligner.initialise(this.frame.toEnu(fix), ar, headingRad, arForwardBearing);
+    const at = this.frame.toEnu(fix);
+    const nearStart = Math.hypot(at.e, at.n) < SNAP_TO_START;
+    this.aligner.initialise(nearStart ? { e: 0, n: 0 } : at, ar, headingRad, arForwardBearing);
     this.fixes = 0;
   }
 

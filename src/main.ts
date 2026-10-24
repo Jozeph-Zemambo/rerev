@@ -120,7 +120,7 @@ const sim = {
   truthPoints: [] as RoutePoint[],
   truthLengths: [] as number[],
   fixClock: 0,
-  seed: 11,
+  seed: 48271 * 977,
 };
 
 // ---------------------------------------------------------------- screens
@@ -435,6 +435,7 @@ function startPreview() {
   scene.background = new THREE.Color(0x1d2b33);
   sim.runnerS = 0;
   sim.fixClock = 0;
+  sim.seed = 48271 * 977;
   if (!routeRun) {
     sim.world = new PreviewWorld(true);
     scene.add(sim.world.group);
@@ -462,6 +463,7 @@ function startPreview() {
     routeRun.startHeading() + SIM_COMPASS_ERROR,
     arBearing(ahead.x - start.x, ahead.z - start.z),
   );
+  camera.position.set(start.x, 1.5, start.z);
   layRoute(routeRun.arPoints(), 0, [new THREE.Vector3(start.x, 0, start.z)], 0);
 }
 
