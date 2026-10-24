@@ -11,6 +11,14 @@ const TERRAIN_AHEAD = 35;
 const HAZARD_AHEAD = 6;
 /** Half-width of the corridor that must be clear for the runner. */
 const CORRIDOR = 0.3;
+/**
+ * Matching to stretches of route that point against the way you are moving costs as much as
+ * being this many metres further away (squared). Out-and-back streets need it: both sides run
+ * side by side, and only your direction of travel says which one you're on.
+ */
+const AGAINST_TRAVEL = 16;
+/** Direction of travel is re-measured each time you have moved this far. */
+const TRAVEL_STRIDE = 0.5;
 /** Side-steps tried, in metres, when something blocks the way. */
 const DETOURS = [0.6, 0.9, 1.2];
 /** Margin kept clear before and after an obstacle, and length of the ramp into a detour. */
@@ -61,6 +69,9 @@ export class Path {
   private offset = new Float32Array(0);
   private offsetTarget = new Float32Array(0);
   private lastProjected = 0;
+  /** Where direction of travel was last measured from, and that direction (unit, or zero if unknown). */
+  private readonly travelFrom = new THREE.Vector3(NaN, 0, NaN);
+  private readonly travel = new THREE.Vector2();
 
   private readonly dashes: THREE.InstancedMesh;
   private readonly matrix = new THREE.Matrix4();
@@ -122,6 +133,8 @@ export class Path {
     if (!reanchor) {
       this.lastProjected = 0;
       this.status.seenUntilS = 0;
+      this.travelFrom.set(NaN, 0, NaN);
+      this.travel.set(0, 0);
     }
   }
 
@@ -153,8 +166,11 @@ export class Path {
 
   /** Distance along the route nearest to a position. Searches near the last answer first. */
   project(position: THREE.Vector3): number {
+    this.measureTravel(position);
+    const { x: tx, y: tz } = this.travel;
     // Nearest point, but jumps along the route cost extra: you can't teleport, so when two
-    // stretches of route run side by side, staying on the one you were on wins.
+    // stretches of route run side by side, staying on the one you were on wins. So does the
+    // one heading the way you are.
     const search = (from: number, to: number) => {
       let best = from;
       let bestScore = Infinity;
@@ -162,8 +178,11 @@ export class Path {
       for (let i = from; i <= to; i++) {
         const d = (this.xs[i] - position.x) ** 2 + (this.zs[i] - position.z) ** 2;
         const jump = Math.max(0, Math.abs(i - this.lastProjected) * STEP - 1.5) * 0.35;
-        if (d + jump * jump < bestScore) {
-          bestScore = d + jump * jump;
+        // Route tangent is (-nz, nx).
+        const along = -this.nz[i] * tx + this.nx[i] * tz;
+        const score = d + jump * jump + Math.max(0, -along) * AGAINST_TRAVEL;
+        if (score < bestScore) {
+          bestScore = score;
           bestDistance = d;
           best = i;
         }
@@ -189,6 +208,19 @@ export class Path {
     }
     this.lastProjected = best;
     return best * STEP;
+  }
+
+  private measureTravel(position: THREE.Vector3) {
+    if (Number.isNaN(this.travelFrom.x)) {
+      this.travelFrom.copy(position);
+      return;
+    }
+    const dx = position.x - this.travelFrom.x;
+    const dz = position.z - this.travelFrom.z;
+    const moved = Math.hypot(dx, dz);
+    if (moved < TRAVEL_STRIDE) return;
+    this.travel.set(dx / moved, dz / moved);
+    this.travelFrom.copy(position);
   }
 
   /**
