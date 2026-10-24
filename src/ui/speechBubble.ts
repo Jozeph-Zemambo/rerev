@@ -48,7 +48,9 @@ export class SpeechBubble {
     }
     this.world.copy(buddyFeet).setY(buddyFeet.y + HEAD_HEIGHT).project(camera);
     const behind = this.world.z > 1;
-    const x = THREE.MathUtils.clamp((this.world.x + 1) / 2, 0.12, 0.88) * innerWidth;
+    // Follow the head, but keep the whole bubble on screen, however long the line is.
+    const half = Math.min(this.el.offsetWidth / 2 + 12, innerWidth / 2);
+    const x = THREE.MathUtils.clamp(((this.world.x + 1) / 2) * innerWidth, half, innerWidth - half);
     const y = THREE.MathUtils.clamp((1 - this.world.y) / 2, 0.22, 0.7) * innerHeight;
     this.el.style.visibility = behind ? 'hidden' : 'visible';
     this.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
