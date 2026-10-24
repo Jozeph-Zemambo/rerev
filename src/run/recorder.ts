@@ -93,11 +93,12 @@ export class RunRecorder {
     const dt = Math.max(0, now - this.lastUpdate);
     this.lastUpdate = now;
     if (runnerS > this.distance) this.distance = Math.min(runnerS, this.distance + MAX_SPEED * dt);
-    this.history.push({ t: now, s: runnerS });
+    // Pace and samples use the capped distance too, so a route re-anchor can't fake a sprint.
+    this.history.push({ t: now, s: this.distance });
     while (this.history.length > 2 && now - this.history[0].t > PACE_WINDOW) this.history.shift();
     const oldest = this.history[0];
     const span = now - oldest.t;
-    if (span > 1) this.pace = Math.max(0, (runnerS - oldest.s) / span);
+    if (span > 1) this.pace = Math.max(0, (this.distance - oldest.s) / span);
 
     if (bpm !== null) {
       this.hrSum += bpm;
@@ -111,7 +112,7 @@ export class RunRecorder {
 
     if (now - this.lastSample >= SAMPLE_EVERY) {
       this.lastSample = now;
-      this.pending.push({ t: now - this.startedAt, distance: runnerS, pace: this.pace, hr: bpm ?? undefined });
+      this.pending.push({ t: now - this.startedAt, distance: this.distance, pace: this.pace, hr: bpm ?? undefined });
     }
     if (now - this.lastFlush >= FLUSH_EVERY) this.flush(now);
   }

@@ -691,7 +691,7 @@ renderer.setAnimationLoop((time, frame) => {
     if (sim.world) heart.simulate(dt, partner.currentSpeed, partner.breaking, now - runStartedAt);
     const line = coach.update(now, heart.bpm, partner);
     if (line) speak(line, line.mood === 'care');
-    const callout = callouts.update(now, runnerS, recorder.distanceSoFar);
+    const callout = callouts.update(now, runnerS, recorder.distanceSoFar, partner.breaking);
     if (callout) speak(callout);
     partner.effort = coach.effort;
     partner.update(dt, runnerS);

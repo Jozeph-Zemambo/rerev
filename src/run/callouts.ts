@@ -20,6 +20,7 @@ export class RouteCallouts {
   private called = new Set<number>();
   private nextKm = 1;
   private lastSplitAt = 0;
+  private lastUpdate = 0;
   private saidHalfway = false;
   private saidFinal = false;
 
@@ -29,12 +30,18 @@ export class RouteCallouts {
     this.called.clear();
     this.nextKm = 1;
     this.lastSplitAt = now;
+    this.lastUpdate = now;
     this.saidHalfway = false;
     this.saidFinal = false;
   }
 
-  /** `runnerS` is how far along the route the runner is; `travelled` the distance they have run. */
-  update(now: number, runnerS: number, travelled: number): CoachLine | null {
+  /**
+   * `runnerS` is how far along the route the runner is; `travelled` the distance they have run.
+   * Time spent on a breather doesn't count towards the kilometre split.
+   */
+  update(now: number, runnerS: number, travelled: number, breaking: boolean): CoachLine | null {
+    if (breaking) this.lastSplitAt += now - this.lastUpdate;
+    this.lastUpdate = now;
     for (let i = 0; i < this.steps.length; i++) {
       const step = this.steps[i];
       if (this.called.has(i)) continue;

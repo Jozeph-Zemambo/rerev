@@ -203,7 +203,7 @@ input[type='range'] { width: 100%; accent-color: var(--coral); }
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
-.stat { background: var(--glass); border-radius: var(--radius); padding: 8px 12px; display: grid; line-height: 1.15; border: 0; color: inherit; text-align: left; }
+.stat { -webkit-user-select: none; user-select: none; background: var(--glass); border-radius: var(--radius); padding: 8px 12px; display: grid; line-height: 1.15; border: 0; color: inherit; text-align: left; }
 button.stat { pointer-events: auto; }
 .stat .v[data-band='above'] { color: #ff9c8a; }
 .stat .v[data-band='below'] { color: #9fe1cb; }

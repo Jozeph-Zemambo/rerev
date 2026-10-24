@@ -19,8 +19,12 @@ const CORRIDOR = 0.3;
  * side by side, and only your direction of travel says which one you're on.
  */
 const AGAINST_TRAVEL = 16;
-/** Direction of travel is re-measured each time you have moved this far. */
+/**
+ * Direction of travel is re-measured each time you have moved this far, within this long.
+ * Slower drift (phone sway while standing, looking around) doesn't count as travelling.
+ */
 const TRAVEL_STRIDE = 0.5;
+const TRAVEL_WITHIN = 2;
 /** Side-steps tried, in metres, when something blocks the way. */
 const DETOURS = [0.6, 0.9, 1.2];
 /** Margin kept clear before and after an obstacle, and length of the ramp into a detour. */
@@ -75,6 +79,7 @@ export class Path {
   private lastProjected = 0;
   /** Where direction of travel was last measured from, and that direction (unit, or zero if unknown). */
   private readonly travelFrom = new THREE.Vector3(NaN, 0, NaN);
+  private travelFromTime = 0;
   private readonly travel = new THREE.Vector2();
 
   private readonly dashes: THREE.InstancedMesh;
@@ -215,16 +220,19 @@ export class Path {
   }
 
   private measureTravel(position: THREE.Vector3) {
-    if (Number.isNaN(this.travelFrom.x)) {
+    const now = performance.now() / 1000;
+    const elapsed = now - this.travelFromTime;
+    const moved = Math.hypot(position.x - this.travelFrom.x, position.z - this.travelFrom.z);
+    if (Number.isNaN(moved) || elapsed > TRAVEL_WITHIN) {
+      // Too slow to be a stride (or the first call): start measuring again from here.
       this.travelFrom.copy(position);
+      this.travelFromTime = now;
       return;
     }
-    const dx = position.x - this.travelFrom.x;
-    const dz = position.z - this.travelFrom.z;
-    const moved = Math.hypot(dx, dz);
     if (moved < TRAVEL_STRIDE) return;
-    this.travel.set(dx / moved, dz / moved);
+    this.travel.set((position.x - this.travelFrom.x) / moved, (position.z - this.travelFrom.z) / moved);
     this.travelFrom.copy(position);
+    this.travelFromTime = now;
   }
 
   /**

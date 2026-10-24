@@ -35,7 +35,12 @@ const CLEAR_AFTER = 0.6;
 const REMEMBER = 15;
 /** How far (in cells) to look for known ground when a cell has none of its own. */
 const REFERENCE_RINGS = 7;
-/** Depth readings get noisier with distance: hazard thresholds grow by this much per metre. */
+/**
+ * Depth readings get noisier with distance: beyond NOISE_FROM metres, hazard thresholds grow by
+ * NOISE_PER_METRE per metre. Up close they stay strict, so a single step down is still caught
+ * well before the buddy reaches it.
+ */
+const NOISE_FROM = 2;
 const NOISE_PER_METRE = 0.02;
 const MAX_GROUND_WEIGHT = 20;
 
@@ -165,7 +170,7 @@ export class SurfaceMap {
       this.addGroundSample(x, y, z, 0.3, GROUND_BAND, now);
       return;
     }
-    const margin = NOISE_PER_METRE * range;
+    const margin = NOISE_PER_METRE * Math.max(0, range - NOISE_FROM);
     const isObstacle = height >= Math.max(OBSTACLE_MIN, this.walkableStep) + margin && height <= OBSTACLE_MAX;
     const isDrop = height <= -(Math.max(DROP_MIN, this.walkableStep) + margin) && height >= -DROP_MAX;
     if (!isObstacle && !isDrop) return;
