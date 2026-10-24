@@ -372,7 +372,7 @@ gps.onFix(fix => {
   if (!placed || !routeRun || sim.world) return;
   const pose = renderer.xr.getCamera().matrixWorld;
   const at = new THREE.Vector3().setFromMatrixPosition(pose);
-  if (routeRun.addFix(fix, { x: at.x, z: at.z })) relayRoute();
+  if (routeRun.addFix(fix, { x: at.x, z: at.z }, path.project(at))) relayRoute();
 });
 
 /** Re-lay the route after the anchor moved. It is a rigid move, so distances along it still hold. */
@@ -522,7 +522,7 @@ function advanceSim(dt: number, now: number, sensorTick: boolean): number {
       const enu = routeRun.frame.toEnu(routeRun.route.points[0]);
       const truthEnu = inverseTruth(at);
       const fix: Fix = { ...routeRun.frame.toLatLon(noisy({ e: truthEnu.e + enu.e, n: truthEnu.n + enu.n })), accuracy: 5, time: now };
-      if (routeRun.addFix(fix, at)) relayRoute();
+      if (routeRun.addFix(fix, at, path.project(camera.position))) relayRoute();
     }
   }
 

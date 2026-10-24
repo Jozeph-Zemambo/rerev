@@ -15,6 +15,14 @@ const TURN_HORIZON = 150;
  * your feet. A first GPS fix this close to it is trusted less than that: the path starts at you.
  */
 const SNAP_TO_START = 40;
+/**
+ * Someone running the route is on it to within a metre or two, which beats GPS across the
+ * route. Each fix also records "you are on the route where we think you are", trusted like a
+ * 3 m fix: it straightens out compass error fast, while GPS still corrects along the route.
+ */
+const ROUTE_MATCH_ACCURACY = 3;
+/** Further than this from the route the runner has probably left it, so no snapping. */
+const ROUTE_MATCH_RANGE = 8;
 
 export type NextTurn = { modifier: string; street: string; metres: number };
 
@@ -24,12 +32,17 @@ export class RouteRun {
   readonly frame: LocalFrame;
   readonly aligner = new GeoAligner();
   private readonly enu: Enu[];
+  private readonly lengths: number[];
   private fixes = 0;
 
   constructor(route: PlannedRoute) {
     this.route = route;
     this.frame = new LocalFrame(route.points[0]);
     this.enu = route.points.map(p => this.frame.toEnu(p));
+    this.lengths = [0];
+    for (let i = 1; i < this.enu.length; i++) {
+      this.lengths.push(this.lengths[i - 1] + Math.hypot(this.enu[i].e - this.enu[i - 1].e, this.enu[i].n - this.enu[i - 1].n));
+    }
   }
 
   /** Direction the route sets off in, radians clockwise from north (fallback when there is no compass). */
@@ -57,12 +70,34 @@ export class RouteRun {
     return this.enu.map(p => apply(t, p));
   }
 
-  /** Feed a GPS fix with where AR tracking says the phone is. Returns true when the route moved. */
-  addFix(fix: Fix, ar: ArPoint): boolean {
+  /**
+   * Feed a GPS fix with where AR tracking says the phone is, and how far along the route the
+   * runner is matched to. Returns true when the route moved.
+   */
+  addFix(fix: Fix, ar: ArPoint, runnerS?: number): boolean {
     if (!this.anchored || fix.accuracy > MAX_ACCURACY) return false;
     this.aligner.addFix(this.frame.toEnu(fix), ar, fix.accuracy, fix.time);
+    if (runnerS !== undefined) this.matchToRoute(runnerS, ar, fix.time);
     this.fixes++;
     return this.fixes % FIXES_PER_REFIT === 0 && this.aligner.refit();
+  }
+
+  private matchToRoute(runnerS: number, ar: ArPoint, time: number) {
+    const onRoute = this.enuAt(runnerS);
+    const shown = apply(this.aligner.transform!, onRoute);
+    if (Math.hypot(shown.x - ar.x, shown.z - ar.z) > ROUTE_MATCH_RANGE) return;
+    this.aligner.addFix(onRoute, ar, ROUTE_MATCH_ACCURACY, time, 'route');
+  }
+
+  /** Map position `s` metres along the route. */
+  private enuAt(s: number): Enu {
+    const L = this.lengths;
+    let i = 1;
+    while (i < L.length - 1 && L[i] < s) i++;
+    const t = Math.min(1, Math.max(0, (s - L[i - 1]) / (L[i] - L[i - 1] || 1)));
+    const a = this.enu[i - 1];
+    const b = this.enu[i] ?? a;
+    return { e: a.e + (b.e - a.e) * t, n: a.n + (b.n - a.n) * t };
   }
 
   /** The next turn ahead of `runnerS` metres along the route, if it is coming up soon. */

@@ -12,12 +12,17 @@ export type GeoTransform = { theta: number; tx: number; tz: number };
 
 export type ArPoint = { x: number; z: number };
 
-type Pair = { p: ArPoint; q: ArPoint; weight: number; time: number };
+/** A map position matched to an AR position: from a GPS fix, or from "the runner is on the route here". */
+type Pair = { p: ArPoint; q: ArPoint; weight: number; time: number; kind: PairKind };
+
+export type PairKind = 'gps' | 'route';
 
 /** Pairs older than this are dropped from the fit (AR tracking drifts slowly over time). */
 const PAIR_WINDOW = 180;
 /** Fit only once the GPS track spans this far, or heading errors swamp the fit. */
 const MIN_SPREAD = 20;
+/** Route matches carry no GPS noise, so they can settle the heading over a shorter stretch. */
+const MIN_ROUTE_SPREAD = 8;
 /** Each refit moves the transform this fraction of the way, so the path glides instead of jumping. */
 const BLEND = 0.35;
 const MIN_ACCURACY = 3;
@@ -61,16 +66,19 @@ export class GeoAligner {
   }
 
   /** Record where GPS says you are and where AR tracking says you are, at the same moment. */
-  addFix(fix: Enu, ar: ArPoint, accuracy: number, time: number) {
+  addFix(fix: Enu, ar: ArPoint, accuracy: number, time: number, kind: PairKind = 'gps') {
     const weight = 1 / Math.max(accuracy, MIN_ACCURACY) ** 2;
-    this.pairs.push({ p: base(fix), q: { ...ar }, weight, time });
+    this.pairs.push({ p: base(fix), q: { ...ar }, weight, time, kind });
     this.pairs = this.pairs.filter(pair => time - pair.time <= PAIR_WINDOW);
   }
 
   /** Re-fit the transform from recent pairs. Returns true if it moved. */
   refit(): boolean {
-    if (!this.transform || this.pairs.length < 4 || this.spread() < MIN_SPREAD) return false;
-    const fit = fitRigid(this.pairs);
+    if (!this.transform) return false;
+    // With enough GPS spread fit everything; before that, route matches alone can fix the heading.
+    const usable = spread(this.pairs) >= MIN_SPREAD ? this.pairs : this.pairs.filter(pair => pair.kind === 'route');
+    if (usable.length < 4 || spread(usable) < (usable === this.pairs ? MIN_SPREAD : MIN_ROUTE_SPREAD)) return false;
+    const fit = fitRigid(usable);
     const t = this.transform;
     t.theta = wrap(t.theta + wrap(fit.theta - t.theta) * BLEND);
     t.tx += (fit.tx - t.tx) * BLEND;
@@ -78,12 +86,14 @@ export class GeoAligner {
     return true;
   }
 
-  private spread(): number {
-    let max = 0;
-    const first = this.pairs[0].p;
-    for (const pair of this.pairs) max = Math.max(max, Math.hypot(pair.p.x - first.x, pair.p.z - first.z));
-    return max;
-  }
+}
+
+function spread(pairs: Pair[]): number {
+  if (pairs.length === 0) return 0;
+  let max = 0;
+  const first = pairs[0].p;
+  for (const pair of pairs) max = Math.max(max, Math.hypot(pair.p.x - first.x, pair.p.z - first.z));
+  return max;
 }
 
 /** Weighted 2D best-fit rotation + translation taking each pair's p onto its q (Kabsch). */
