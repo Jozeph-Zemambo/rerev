@@ -125,6 +125,34 @@ button:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
 .summary-grid dt { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
 .summary-grid dd { margin: 2px 0 0; font-family: var(--display); font-weight: 800; font-size: 28px; font-variant-numeric: tabular-nums; }
 
+/* The summary as a sheet inside AR: Walk your course keeps the camera open between runs. */
+#summary.in-ar {
+  inset: auto 0 0 0;
+  max-height: 82%;
+  overflow-y: auto;
+  border-radius: 24px 24px 0 0;
+  box-shadow: 0 -8px 28px rgba(20, 12, 6, 0.35);
+  pointer-events: auto;
+  color: var(--ink);
+}
+#summary.in-ar .home-inner { height: auto; overflow: visible; padding: 20px 16px 16px; }
+#summary.in-ar .summary-title { font-size: 38px; }
+.summary-actions { display: grid; gap: 10px; }
+.summary-actions-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.soft-button {
+  border: 0;
+  border-radius: var(--radius);
+  padding: 13px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 19px;
+  box-shadow: 0 4px 0 var(--line);
+  transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.soft-button:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--line); }
+
 /* Planner */
 #map { position: absolute; inset: 0; z-index: 0; }
 .planner-top {
@@ -377,10 +405,25 @@ button.stat { pointer-events: auto; }
 #controls button.talk { display: inline-flex; align-items: center; gap: 6px; background: var(--paper); color: var(--ink); box-shadow: 0 3px 0 var(--line); }
 #controls button.talk.listening { background: var(--coral); color: #fff; box-shadow: 0 3px 0 #d4513d; animation: listening 1s ease-in-out infinite; }
 @keyframes listening { 50% { transform: scale(1.06); } }
+#course-panel { display: flex; justify-content: center; gap: 10px; }
+#course-panel button {
+  pointer-events: auto;
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 24px;
+  font-size: 18px;
+  font-weight: 800;
+  background: var(--sun);
+  color: var(--ink);
+  box-shadow: 0 4px 0 #e08e22;
+}
+#course-panel button.secondary { background: var(--glass); color: var(--glass-ink); box-shadow: none; }
+#btn-record { display: inline-flex; align-items: center; gap: 10px; background: var(--coral) !important; color: #fff !important; box-shadow: 0 4px 0 #d4513d !important; }
+.rec-dot { width: 12px; height: 12px; border-radius: 50%; background: #fff; }
 @media (prefers-reduced-motion: reduce) { #controls button.talk.listening { animation: none; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .card-button, .big-button { transition: none; }
+  .card-button, .big-button, .soft-button { transition: none; }
   .bubble.pop span { animation: none; }
   #score.bump { animation: none; }
 }

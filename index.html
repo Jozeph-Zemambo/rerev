@@ -25,9 +25,9 @@
           <span class="card-title">Quick start here</span>
           <span class="card-sub">A short path right in front of you</span>
         </button>
-        <button id="go-laps" class="card-button alt" type="button">
-          <span class="card-title">Laps right here</span>
-          <span class="card-sub">A small oval that fits in a room</span>
+        <button id="go-course" class="card-button alt" type="button">
+          <span class="card-title">Walk your course</span>
+          <span class="card-sub">Walk a route, then run it with your buddy</span>
         </button>
         <div id="recent" hidden>
           <h3>Recent runs</h3>
@@ -55,6 +55,13 @@
           <div class="gold"><dt>Coins</dt><dd id="sum-coins">–</dd></div>
         </dl>
         <button id="summary-done" class="big-button" type="button">Back home</button>
+        <div id="summary-course" class="summary-actions" hidden>
+          <button id="sum-again" class="big-button" type="button">Run again</button>
+          <div class="summary-actions-row">
+            <button id="sum-new" class="soft-button" type="button">New course</button>
+            <button id="sum-exit" class="soft-button" type="button">Exit</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -114,6 +121,11 @@
       <div id="bottom">
         <div id="score" aria-live="polite"><span class="star">★ <b id="score-stars">0</b></span><span class="coin">● <b id="score-coins">0</b></span></div>
         <div id="message">Starting up…</div>
+        <div id="course-panel" hidden>
+          <button id="btn-course-redo" type="button" class="secondary" hidden>Start over</button>
+          <button id="btn-record" type="button"><span class="rec-dot" aria-hidden="true"></span>Record</button>
+          <button id="btn-course-done" type="button" hidden>Done</button>
+        </div>
         <div id="controls" hidden>
           <button id="btn-talk" type="button" class="talk" aria-label="Talk to your buddy">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-6a3.5 3.5 0 1 0-7 0v6A3.5 3.5 0 0 0 12 15Zm6-3.5a1 1 0 1 0-2 0 4 4 0 0 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.92V20H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-2.58a6 6 0 0 0 5-5.92Z"/></svg>

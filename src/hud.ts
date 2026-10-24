@@ -34,6 +34,7 @@ export class Hud {
   private readonly lead = byId('lead');
   private readonly message = byId('message');
   private readonly controls = byId('controls');
+  private readonly topbar = byId('topbar');
   private readonly turn = byId('turn');
   private readonly turnArrow = byId('turn-arrow');
   private readonly turnText = byId('turn-text');
@@ -41,6 +42,10 @@ export class Hud {
   readonly slowerButton = byId<HTMLButtonElement>('btn-slower');
   readonly fasterButton = byId<HTMLButtonElement>('btn-faster');
   readonly finishButton = byId<HTMLButtonElement>('btn-reset');
+  private readonly coursePanel = byId('course-panel');
+  readonly recordButton = byId<HTMLButtonElement>('btn-record');
+  readonly courseDoneButton = byId<HTMLButtonElement>('btn-course-done');
+  readonly courseRedoButton = byId<HTMLButtonElement>('btn-course-redo');
 
   show(visible: boolean) {
     this.root.hidden = !visible;
@@ -65,8 +70,19 @@ export class Hud {
     if (this.message.textContent !== text) this.message.textContent = text;
   }
 
+  /** The run's controls, stats and score: only while a run is on, so none of them show stale numbers. */
   showControls(visible: boolean) {
     this.controls.hidden = !visible;
+    this.topbar.hidden = !visible;
+    this.score.hidden = !visible;
+  }
+
+  /** Walk your course: Record before recording; Start over and Done while recording; else nothing. */
+  showCoursePanel(stage: 'ready' | 'recording' | null) {
+    this.coursePanel.hidden = stage === null;
+    this.recordButton.hidden = stage !== 'ready';
+    this.courseDoneButton.hidden = stage !== 'recording';
+    this.courseRedoButton.hidden = stage !== 'recording';
   }
 
   /** Next turn on a map route, or null to hide the chip. */

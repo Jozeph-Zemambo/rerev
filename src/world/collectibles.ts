@@ -38,11 +38,12 @@ const coinMaterial = new THREE.MeshStandardMaterial({ color: 0xf5b400, emissive:
 export class Collectibles {
   readonly group = new THREE.Group();
   private items: Item[] = [];
-  private showAhead = SHOW_AHEAD;
+  /** How far ahead items are drawn. On a course, kept short of the next lap or the way back. */
+  showAhead = SHOW_AHEAD;
   private readonly at = new THREE.Vector3();
   private readonly tangent = new THREE.Vector3();
 
-  /** `showAhead` caps how far ahead items appear (under one lap on a lap course). */
+  /** `showAhead` caps how far ahead items appear (under one lap on a loop). */
   layout(pathLength: number, showAhead = SHOW_AHEAD) {
     this.clear();
     this.showAhead = showAhead;

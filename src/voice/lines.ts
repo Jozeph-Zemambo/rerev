@@ -92,6 +92,8 @@ const FIXED = [
   { id: 'run_start_2', text: "Ready, set, run! Follow me!", mood: 'cheer', category: 'run', note: 'Excited start.' },
   { id: 'run_start_3', text: "Here we go! Stay with me.", mood: 'cheer', category: 'run', note: 'Excited start.' },
   { id: 'run_finish', text: 'We made it! Great run.', mood: 'cheer', category: 'run', note: 'Proud, celebratory.' },
+  { id: 'course_ready_loop', text: "Loop's ready. Let's go!", mood: 'cheer', category: 'run', note: 'Pleased with the course you drew.' },
+  { id: 'course_ready_line', text: "Out and back it is. Let's go!", mood: 'cheer', category: 'run', note: 'Pleased with the course you drew.' },
   { id: 'run_tracking_lost', text: "I can't see the ground. Point your phone at the floor ahead.", mood: 'info', category: 'run', note: 'Helpful, unhurried.' },
 
   // Coin pickups. Short and squeaky; only said when the buddy isn't already talking.

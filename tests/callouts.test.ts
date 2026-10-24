@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { RouteCallouts } from '../src/run/callouts';
 import { bubbleText, kmLineId, lapLineId, lineById, type Spoken } from '../src/voice/lines';
 import type { TurnStep } from '../src/geo/routing';
-import * as THREE from 'three';
-import { lapRoute, Path } from '../src/world/path';
+import { courseRun, type Course } from '../src/world/course';
+import { Path } from '../src/world/path';
 
 const at = { lat: 0, lon: 0 };
 const step = (fromStart: number, modifier: string, street = '', type = 'turn'): TurnStep => ({ at, type, modifier, street, fromStart });
@@ -54,7 +54,7 @@ test('kilometre splits leave out time spent on a breather', () => {
   assert.ok(said.some(line => line.id === 'route_final_stretch'));
 });
 
-test('the lap course calls each lap', () => {
+test('a course calls each lap', () => {
   const callouts = new RouteCallouts();
   callouts.reset(0, [], 0, 13.5);
   const said: Spoken[] = [];
@@ -68,20 +68,28 @@ test('the lap course calls each lap', () => {
   ]);
 });
 
-test('every lap of the 20-lap course is called, including the last', () => {
-  const path = new Path();
-  path.setRoute(lapRoute(new THREE.Vector3(), new THREE.Vector3(0, 0, -1), 20), 0);
-  const callouts = new RouteCallouts();
-  callouts.reset(0, [], 0, path.length / 20);
-  const laps: string[] = [];
-  // Progress can't go past the end of the path, just as on the phone.
-  for (let s = 0; s <= path.length + 5; s += 0.25) {
-    const line = callouts.update(s, Math.min(s, path.length), Math.min(s, path.length), false);
-    if (line) laps.push(line.id);
-  }
-  assert.equal(laps.length, 20);
-  assert.equal(laps.at(-1), 'lap_20');
-});
+// A loop walked round a room, with rounded corners, and the same as an out-and-back.
+const room: Course = {
+  kind: 'loop',
+  points: [{ x: 0, z: 0 }, { x: 2.9, z: 0.1 }, { x: 3.1, z: -2 }, { x: 0.2, z: -2.2 }, { x: 0, z: 0 }],
+  length: 10.3,
+};
+const corridor: Course = { kind: 'line', points: [{ x: 0, z: 0 }, { x: 0.1, z: -4 }, { x: 2, z: -5 }], length: 6.15 };
+
+for (const [name, course] of [['loop', room], ['out-and-back', corridor]] as const) {
+  test(`every lap of a 20-lap ${name} is called, including the last`, () => {
+    const run = courseRun(course, course.points[0], 20);
+    const path = new Path();
+    path.setRoute(run.points, 0);
+    const callouts = new RouteCallouts();
+    // As main.ts does: laps are measured on the path itself, which resampling trims a little.
+    callouts.reset(0, [], 0, path.length / run.laps);
+    let laps = 0;
+    // Progress can't go past the end of the path, just as on the phone.
+    for (let s = 0; s <= path.length + 5; s += 0.25) if (callouts.update(s, Math.min(s, path.length), Math.min(s, path.length), false)) laps++;
+    assert.equal(laps, 20);
+  });
+}
 
 test('splits and laps past the numbered lines use the generic ones', () => {
   assert.equal(kmLineId(10), 'split_km_10');

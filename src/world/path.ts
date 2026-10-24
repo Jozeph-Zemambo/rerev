@@ -61,7 +61,7 @@ export class Path {
   readonly group = new THREE.Group();
   length = 0;
   readonly status: PathStatus = { blockedAtS: null, blockReason: null, detouring: false, seenUntilS: 0 };
-  /** Dashes are drawn this far ahead of the runner. Shorter than a lap on lap courses, so laps don't stack. */
+  /** Dashes are drawn this far ahead of the runner. Shorter than a lap on courses, so laps don't stack. */
   drawAhead = DRAW_AHEAD;
   /** Staircases found along this route. Kept when the route is only re-anchored. */
   stairs: StairSpan[] = [];
@@ -501,33 +501,6 @@ export function resample(points: RoutePoint[], step: number): RoutePoint[] {
 }
 
 /** The indoor demo route: a gentle S-curve heading away from where the user stands. */
-/** One lap of the lap course: a running-track oval that fits in a room, starting at the tap. */
-export const LAP = { straight: 3, radius: 1.2 };
-export const LAP_LENGTH = 2 * LAP.straight + 2 * Math.PI * LAP.radius;
-
-/**
- * `laps` laps of a small running-track oval: from `start` along `direction` for the straight,
- * a half circle to the left, back down the other straight, and a half circle home. It covers
- * about 5.4 m × 2.4 m, reaching 1.2 m back behind `start`.
- */
-export function lapRoute(start: THREE.Vector3, direction: THREE.Vector3, laps: number): RoutePoint[] {
-  const left = new THREE.Vector3().crossVectors(UP, direction).normalize();
-  const { straight, radius } = LAP;
-  const at = (along: number, across: number): RoutePoint => ({
-    x: start.x + direction.x * along + left.x * across,
-    z: start.z + direction.z * along + left.z * across,
-  });
-  const lap: RoutePoint[] = [];
-  for (let u = 0; u < straight; u += 0.25) lap.push(at(u, 0));
-  for (let a = 0; a < Math.PI; a += 0.2) lap.push(at(straight + Math.sin(a) * radius, radius - Math.cos(a) * radius));
-  for (let u = straight; u > 0; u -= 0.25) lap.push(at(u, 2 * radius));
-  for (let a = 0; a < Math.PI; a += 0.2) lap.push(at(-Math.sin(a) * radius, radius + Math.cos(a) * radius));
-  const points: RoutePoint[] = [];
-  for (let i = 0; i < laps; i++) points.push(...lap);
-  points.push(at(0, 0));
-  return points;
-}
-
 export function demoRoute(start: THREE.Vector3, direction: THREE.Vector3, length: number): RoutePoint[] {
   const side = new THREE.Vector3().crossVectors(UP, direction).normalize();
   const points: RoutePoint[] = [];

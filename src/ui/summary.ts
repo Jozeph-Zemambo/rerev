@@ -16,10 +16,11 @@ export function formatDuration(seconds: number) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-/** The end-of-run card. */
+/** The end-of-run card: a full screen after AR, or a sheet over the camera view inside AR. */
 export class SummaryScreen {
   onDone: () => void = () => {};
   private readonly screen = byId('summary');
+  private readonly home = this.screen.parentElement!;
 
   constructor() {
     byId('summary-done').onclick = () => {
@@ -28,7 +29,11 @@ export class SummaryScreen {
     };
   }
 
-  show(summary: RunSummary, trace: readonly TracePoint[] = [], zone?: Zone) {
+  /**
+   * Pass `overlay` (the AR DOM overlay root) to show it inside AR, where only the overlay is
+   * visible, with Run again / New course / Exit instead of Back home.
+   */
+  show(summary: RunSummary, trace: readonly TracePoint[] = [], zone?: Zone, overlay?: HTMLElement) {
     const set = (id: string, text: string) => (byId(id).textContent = text);
     set('summary-title', summary.distance < 30 ? 'Good warm-up!' : summary.breaks === 0 ? 'Nonstop. Nice!' : 'Nice run!');
     set('sum-distance', formatDistance(summary.distance));
@@ -46,7 +51,16 @@ export class SummaryScreen {
       set('sum-zone-range', `(${zone.low}–${zone.high} bpm)`);
       drawHeartChart(byId('sum-chart'), trace, zone);
     }
+    if (this.screen.parentElement !== (overlay ?? this.home)) (overlay ?? this.home).appendChild(this.screen);
+    this.screen.classList.toggle('in-ar', !!overlay);
+    byId('summary-done').hidden = !!overlay;
+    byId('summary-course').hidden = !overlay;
     this.screen.hidden = false;
+    this.screen.querySelector('.home-inner')!.scrollTop = 0;
+  }
+
+  hide() {
+    this.screen.hidden = true;
   }
 }
 
