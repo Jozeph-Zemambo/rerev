@@ -443,6 +443,7 @@ function endRun() {
   mode = null;
   routeRun = null;
   resetCourse();
+  reticle.visible = false;
   mascot.root.visible = false;
   shadow.visible = false;
   clearRunScene();
@@ -580,6 +581,8 @@ renderer.xr.addEventListener('sessionstart', async () => {
   hitTestSource = (await session.requestHitTestSource?.({ space: viewerSpace })) ?? null;
   await groundRays.start(session);
   placed = false;
+  // The last session's ring is in a different world origin: wait for this one's.
+  reticle.visible = false;
   showRunUi(true);
   hud.showControls(false);
   const where = routeRun
@@ -678,7 +681,12 @@ function finishRecording() {
   if (course.phase !== 'recording') return;
   const built = course.recording.length >= MIN_COURSE ? buildCourse(course.recording.points) : null;
   if (!built) {
-    hud.say(`Walk a bit further: at least ${MIN_COURSE} m, then tap Done. (${course.recording.length.toFixed(1)} m so far.)`);
+    const walked = course.recording.length;
+    hud.say(
+      walked < MIN_COURSE
+        ? `Walk a bit further: at least ${MIN_COURSE} m, then tap Done. (${walked.toFixed(1)} m so far.)`
+        : 'That doubles straight back after only a couple of metres. Walk further out, then tap Done.',
+    );
     messageHoldUntil = performance.now() / 1000 + 3;
     return;
   }
@@ -742,12 +750,18 @@ const reticleAt = new THREE.Vector3();
  * Every frame before a run starts (and between runs on a course): record the course if that's
  * under way, and have the buddy stand on the floor facing you, waving, so it's there to see.
  */
-function beforeRun(dt: number, seconds: number, now: number, sensorTick: boolean, frame?: XRFrame, referenceSpace?: XRReferenceSpace | null) {
+function beforeRun(dt: number, seconds: number, now: number, sensorTick: boolean, trackingLost: boolean, frame?: XRFrame, referenceSpace?: XRReferenceSpace | null) {
+  // On a phone, nothing to do until the AR session is up.
+  if (!sim.world && !renderer.xr.isPresenting) return;
   if (mode?.kind === 'course') {
     if (course.phase === 'find' && reticle.visible) setCoursePhase('ready');
     if (course.phase === 'recording') {
       if (sim.walk) advanceSimWalk(dt);
-      recordAt(viewerPosition(viewerAt));
+      // A tracking glitch would record a jump straight across the room: wait for it to recover.
+      if (trackingLost) {
+        hud.say('Lost track of the floor. Hold the phone steady and point it at the floor ahead.');
+        messageHoldUntil = now + 0.5;
+      } else recordAt(viewerPosition(viewerAt));
       if (sensorTick) {
         if (sim.world) {
           sim.world.sampleDepth(camera, map, now);
@@ -1113,7 +1127,7 @@ renderer.setAnimationLoop((time, frame) => {
     if (placed || course.phase === 'recording') rayHits = groundRays.sample(frame, referenceSpace, map);
   }
 
-  if (!placed && mode) beforeRun(dt, seconds, now, sensorTick, frame, referenceSpace);
+  if (!placed && mode) beforeRun(dt, seconds, now, sensorTick, trackingLost, frame, referenceSpace);
 
   if (placed && mode) {
     let runnerS: number;

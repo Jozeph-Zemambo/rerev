@@ -56,6 +56,8 @@ export class SummaryScreen {
     byId('summary-done').hidden = !!overlay;
     byId('summary-course').hidden = !overlay;
     this.screen.hidden = false;
+    // Full screen, the inner column scrolls; as a sheet in AR, the sheet itself does.
+    this.screen.scrollTop = 0;
     this.screen.querySelector('.home-inner')!.scrollTop = 0;
   }
 
