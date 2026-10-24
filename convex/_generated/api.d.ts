@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as buddy from "../buddy.js";
 import type * as heartRate from "../heartRate.js";
 import type * as http from "../http.js";
 import type * as runs from "../runs.js";
@@ -19,6 +20,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  buddy: typeof buddy;
   heartRate: typeof heartRate;
   http: typeof http;
   runs: typeof runs;

@@ -2,6 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { DepthSensor } from './ar/depthSensor';
 import { GroundRays } from './ar/groundRays';
+import { api } from '../convex/_generated/api';
 import { convex } from './convexClient';
 import { apply, arBearing } from './geo/alignment';
 import { Compass, Gps, type Fix } from './geo/sensors';
@@ -160,40 +161,66 @@ commands.onState = (listening, error) => {
 commands.onHeard = (transcript, intent) => {
   hud.say(`You said: "${transcript}"`);
   messageHoldUntil = performance.now() / 1000 + 3;
-  respond(intent);
+  if (intent === 'unknown' && convex) void askClaude(transcript);
+  else respond(intent);
 };
 
-/** What the buddy does when you talk to it. */
-function respond(intent: Intent) {
+/** Phrases the keyword rules don't know go to Claude Haiku (via Convex), if a key is set. */
+async function askClaude(said: string) {
+  bubble.show({ text: 'Hmm…', mood: 'info' }, performance.now() / 1000);
+  const result = await convex!
+    .action(api.buddy.interpret, {
+      said,
+      run: {
+        bpm: heart.bpm ?? undefined,
+        zoneLow: coach.zone.low,
+        zoneHigh: coach.zone.high,
+        metres: Math.round(recorder.distanceSoFar),
+        paceSecondsPerKm: recorder.pace > 0.3 ? Math.round(1000 / recorder.pace) : undefined,
+        onBreak: partner.breaking,
+      },
+    })
+    .catch(() => null);
+  if (!placed) return;
+  if (!result) return respond('unknown');
+  if (result.intent === 'chat') return speak({ text: result.reply, mood: 'cheer' });
+  respond(result.intent, result.reply);
+}
+
+/** What the buddy does when you talk to it. `reply` replaces its usual line (Claude's wording). */
+function respond(intent: Intent | 'chat', reply?: string) {
+  const say = (text: string, mood: CoachLine['mood'], interrupt = false) => speak({ text: reply ?? text, mood }, interrupt);
   switch (intent) {
+    case 'chat':
+      return say("I'm all ears. Let's keep moving!", 'cheer');
     case 'break':
       partner.setBreak(true);
       coach.autoBreak = false;
-      return speak({ text: 'Sure, breather time. Jog on the spot with me.', mood: 'care' }, true);
+      return say('Sure, breather time. Jog on the spot with me.', 'care', true);
     case 'go':
-      if (!partner.breaking) return speak({ text: "I'm right here. Let's keep it up!", mood: 'cheer' });
+      if (!partner.breaking) return say("I'm right here. Let's keep it up!", 'cheer');
       partner.setBreak(false);
       coach.autoBreak = false;
-      return speak({ text: "Alright, let's go!", mood: 'cheer' }, true);
+      return say("Alright, let's go!", 'cheer', true);
     case 'faster':
       partner.nudgePace(0.3);
-      return speak({ text: 'Picking it up!', mood: 'cheer' });
+      return say('Picking it up!', 'cheer');
     case 'slower':
       partner.nudgePace(-0.3);
-      return speak({ text: 'Easing off. Nice and steady.', mood: 'care' });
+      return say('Easing off. Nice and steady.', 'care');
     case 'status': {
       const bpm = heart.bpm;
       const parts = [`${formatDistance(recorder.distanceSoFar)} so far`];
       if (recorder.pace > 0.3) parts.push(`${formatPace(recorder.pace).replace(':', ' ')} pace`);
       if (bpm) parts.push(`heart at ${Math.round(bpm)}`);
-      return speak({ text: `${parts.join(', ')}. You're doing great!`, mood: 'info' });
+      return say(`${parts.join(', ')}. You're doing great!`, 'info');
     }
     case 'finish':
-      speak({ text: 'Great run! Wrapping up.', mood: 'cheer' }, true);
+      say('Great run! Wrapping up.', 'cheer', true);
       setTimeout(() => void finishRun(), 1500);
       return;
     case 'unknown':
-      return speak({ text: "Sorry, I didn't catch that. Try \"take a break\" or \"let's go\".", mood: 'info' });
+      return say("Sorry, I didn't catch that. Try \"take a break\" or \"let's go\".", 'info');
   }
 }
 
