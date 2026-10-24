@@ -25,13 +25,15 @@ import { formatDistance } from './ui/summary';
 import { Sounds } from './ui/sounds';
 import { Collectibles } from './world/collectibles';
 import { HazardMarkers } from './world/hazardMarkers';
-import { demoRoute, Path, type RoutePoint } from './world/path';
+import { demoRoute, LAP, LAP_LENGTH, lapRoute, Path, type RoutePoint } from './world/path';
 import { createShadow } from './world/shadow';
 import { SurfaceMap } from './world/surfaceMap';
 
-type RunMode = { kind: 'quick' } | { kind: 'route'; goal: RunGoal };
+type RunMode = { kind: 'quick'; laps?: boolean } | { kind: 'route'; goal: RunGoal };
 
 const QUICK_LENGTH = 20;
+/** The lap course runs this many laps (about 270 m). */
+const LAPS = 20;
 const QUICK_PACE = 1.6;
 /** Depth, hazard planning and markers run at ~10 Hz; drawing runs every frame. */
 const SENSOR_INTERVAL = 0.1;
@@ -141,6 +143,10 @@ byId('go-plan').onclick = () => {
 byId('go-indoor').onclick = () => {
   askForMicrophone();
   void startRun({ kind: 'quick' });
+};
+byId('go-laps').onclick = () => {
+  askForMicrophone();
+  void startRun({ kind: 'quick', laps: true });
 };
 
 /**
@@ -333,7 +339,10 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   for (const seed of seeds) map.seedGround(seed.x, floorY, seed.z, 1);
   path.setRoute(points, floorY);
   path.group.visible = true;
-  collectibles.layout(path.length);
+  // On the lap course, only draw less than a lap ahead so laps don't stack up on each other.
+  const lapCourse = mode?.kind === 'quick' && mode.laps;
+  path.drawAhead = lapCourse ? LAP_LENGTH - 3 : 38;
+  collectibles.layout(path.length, lapCourse ? LAP_LENGTH - 3 : undefined);
   hud.showScore(0, 0);
   partner.reset(runnerS);
   partner.effort = 1;
@@ -363,7 +372,8 @@ function placeAt(start: THREE.Vector3, cameraMatrix: THREE.Matrix4) {
   const seeds = [start, new THREE.Vector3(from.x, start.y, from.z)];
   if (!routeRun) {
     const direction = new THREE.Vector3(start.x - from.x, 0, start.z - from.z).normalize();
-    layRoute(demoRoute(start, direction, QUICK_LENGTH), start.y, seeds, 0);
+    const points = mode?.kind === 'quick' && mode.laps ? lapRoute(start, direction, LAPS) : demoRoute(start, direction, QUICK_LENGTH);
+    layRoute(points, start.y, seeds, 0);
     return;
   }
   const fix = gps.latest;
@@ -450,6 +460,14 @@ function startPreview() {
   sim.runnerS = 0;
   sim.fixClock = 0;
   sim.seed = 48271 * 977;
+  if (!routeRun && mode?.kind === 'quick' && mode.laps) {
+    // Lap course on a bare floor, with a bag dropped on the far straight to steer around.
+    sim.world = new PreviewWorld(false, 30);
+    sim.world.addBox(-2 * LAP.radius + 0.1, -1.6, 0.4, 0.35, 0.3);
+    scene.add(sim.world.group);
+    layRoute(lapRoute(new THREE.Vector3(), new THREE.Vector3(0, 0, -1), LAPS), 0, [new THREE.Vector3(0, 0, 0)], 0);
+    return;
+  }
   if (!routeRun) {
     sim.world = new PreviewWorld(true);
     scene.add(sim.world.group);

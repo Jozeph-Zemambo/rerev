@@ -37,6 +37,7 @@ button:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
 .home-inner {
   height: 100%;
   box-sizing: border-box;
+  overflow-y: auto;
   max-width: 440px;
   margin: 0 auto;
   padding: 48px 20px 32px;
@@ -84,7 +85,7 @@ button:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
 
 /* Summary */
 .summary-title { margin: 0 0 8px; font-family: var(--display); font-weight: 800; font-size: 48px; line-height: 1; }
-#summary .home-inner { overflow-y: auto; padding-top: 28px; gap: 10px; }
+#summary .home-inner { padding-top: 28px; gap: 10px; }
 .zone-card { background: var(--paper); border-radius: 16px; padding: 12px 14px 10px; margin: 0 0 12px; box-shadow: 0 3px 0 var(--line); position: relative; }
 .zone-hero { margin: 0 0 6px; display: flex; align-items: baseline; gap: 10px; }
 .zone-hero b { font-family: var(--display); font-weight: 800; font-size: 40px; line-height: 1; font-variant-numeric: tabular-nums; }

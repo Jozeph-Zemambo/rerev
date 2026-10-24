@@ -38,11 +38,14 @@ const coinMaterial = new THREE.MeshStandardMaterial({ color: 0xf5b400, emissive:
 export class Collectibles {
   readonly group = new THREE.Group();
   private items: Item[] = [];
+  private showAhead = SHOW_AHEAD;
   private readonly at = new THREE.Vector3();
   private readonly tangent = new THREE.Vector3();
 
-  layout(pathLength: number) {
+  /** `showAhead` caps how far ahead items appear (under one lap on a lap course). */
+  layout(pathLength: number, showAhead = SHOW_AHEAD) {
     this.clear();
+    this.showAhead = showAhead;
     let index = 0;
     for (let s = FIRST_AT; s < pathLength - 2; s += SPACING, index++) {
       const kind: CollectibleKind = index % COIN_EVERY === COIN_EVERY - 1 ? 'coin' : 'star';
@@ -62,7 +65,7 @@ export class Collectibles {
   update(dt: number, time: number, path: Path, runnerS: number, runner: THREE.Vector3): CollectibleKind[] {
     const picked: CollectibleKind[] = [];
     for (const item of this.items) {
-      const inWindow = item.s > runnerS - SHOW_BEHIND && item.s < runnerS + SHOW_AHEAD;
+      const inWindow = item.s > runnerS - SHOW_BEHIND && item.s < runnerS + this.showAhead;
       if (item.collected) {
         if (item.popAge < POP_TIME) {
           item.popAge += dt;

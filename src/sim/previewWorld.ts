@@ -119,6 +119,13 @@ export class PreviewWorld {
     return this.hits[0]?.point.y ?? 0;
   }
 
+  /** A box sitting on the floor, e.g. a bag dropped on the lap course. */
+  addBox(x: number, z: number, width: number, height: number, depth: number) {
+    const box = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), new THREE.MeshStandardMaterial({ color: 0x5b6fb5, roughness: 0.7 }));
+    box.position.set(x, height / 2, z);
+    this.add(box);
+  }
+
   private add(mesh: THREE.Mesh) {
     this.solids.push(mesh);
     this.group.add(mesh);
