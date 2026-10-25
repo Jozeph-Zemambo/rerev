@@ -86,6 +86,14 @@ export class Partner {
     if (this.nextTurn < 0) this.nextTurn = this.turnarounds.length;
   }
 
+  /**
+   * Pick up again at `s` (follow-me: the runner went past, so it reappears ahead of them). Keeps
+   * its speed, so it doesn't stand and restart.
+   */
+  skipTo(s: number) {
+    this.s = s;
+  }
+
   setBreak(onBreak: boolean) {
     this.onBreak = onBreak;
   }

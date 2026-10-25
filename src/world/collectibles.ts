@@ -40,6 +40,9 @@ export class Collectibles {
   private items: Item[] = [];
   /** How far ahead items are drawn. On a course, kept short of the next lap or the way back. */
   showAhead = SHOW_AHEAD;
+  /** Where the next item goes, and how many have been placed (every fifth is a coin). */
+  private nextAt = FIRST_AT;
+  private placed = 0;
   private readonly at = new THREE.Vector3();
   private readonly tangent = new THREE.Vector3();
 
@@ -47,19 +50,35 @@ export class Collectibles {
   layout(pathLength: number, showAhead = SHOW_AHEAD) {
     this.clear();
     this.showAhead = showAhead;
-    let index = 0;
-    for (let s = FIRST_AT; s < pathLength - 2; s += SPACING, index++) {
-      const kind: CollectibleKind = index % COIN_EVERY === COIN_EVERY - 1 ? 'coin' : 'star';
+    this.extendTo(pathLength);
+  }
+
+  /**
+   * The path got longer (follow-me lays more as you go): carry on placing items to its new end.
+   * Items keep their distance along the path, so a re-laid stretch carries them with it.
+   */
+  extendTo(pathLength: number) {
+    for (; this.nextAt < pathLength - 2; this.nextAt += SPACING, this.placed++) {
+      const s = this.nextAt;
+      const kind: CollectibleKind = this.placed % COIN_EVERY === COIN_EVERY - 1 ? 'coin' : 'star';
       const mesh = new THREE.Mesh(kind === 'star' ? starGeometry : coinGeometry, kind === 'star' ? starMaterial : coinMaterial);
       mesh.visible = false;
       this.group.add(mesh);
       this.items.push({ s, side: Math.sin(s * 0.7) * 0.25, kind, collected: false, popAge: 0, mesh });
+    }
+    // Long runs: drop what's been collected (or left far behind) so the list doesn't grow forever.
+    const dropped = this.items.filter(item => item.s < this.nextAt - 200 || (item.collected && item.popAge >= POP_TIME));
+    if (dropped.length > 20) {
+      for (const item of dropped) this.group.remove(item.mesh);
+      this.items = this.items.filter(item => !dropped.includes(item));
     }
   }
 
   clear() {
     this.group.clear();
     this.items = [];
+    this.nextAt = FIRST_AT;
+    this.placed = 0;
   }
 
   /** Returns what the runner picked up this frame. */
