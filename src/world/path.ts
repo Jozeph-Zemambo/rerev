@@ -25,6 +25,8 @@ const AGAINST_TRAVEL = 16;
  */
 const TRAVEL_STRIDE = 0.5;
 const TRAVEL_WITHIN = 2;
+/** Ground at least this far above the path's floor, when looking for stairs, is a tread. */
+const RAISED_TREAD = 0.1;
 /** Side-steps tried, in metres, when something blocks the way. */
 const DETOURS = [0.6, 0.9, 1.2];
 /** Margin kept clear before and after an obstacle, and length of the ramp into a detour. */
@@ -508,7 +510,12 @@ export class Path {
     const base = this.ys[Math.max(0, i0 - 3)];
     const tops: { k: number; h: number }[] = [];
     for (let k = 0; k < 45 && i0 + k < this.count; k++) {
-      const top = map.obstacleTopAt(this.xs[i0 + k], this.zs[i0 + k], now);
+      const x = this.xs[i0 + k];
+      const z = this.zs[i0 + k];
+      // Treads the phone's floor detection already found (raised ground) count as much as
+      // obstacle tops seen by depth: near ones are often learned as ground before depth confirms them.
+      const ground = map.groundAt(x, z);
+      const top = map.obstacleTopAt(x, z, now) ?? (ground !== null && ground - base >= RAISED_TREAD ? ground : null);
       if (top === null) continue;
       const h = top - base;
       const previous = tops.at(-1);
@@ -559,7 +566,8 @@ export class Path {
     const span = this.stairs.find(st => s > st.toS && s <= st.toS + 3);
     if (!span) return false;
     // Check the whole corridor, not just the centre line: the hazard may be a cell beside it.
-    map.promoteToGround(this.xs[i], this.zs[i], CORRIDOR + 0.1, now, { from: span.toY - 0.1, to: span.toY + 0.1 });
+    // Anything no higher than the landing is the landing or one of the steps up to it.
+    map.promoteToGround(this.xs[i], this.zs[i], CORRIDOR + 0.1, now, { from: span.fromY, to: span.toY + 0.1 });
     return this.hazardAtOffset(i, 0, map, now) === null;
   }
 
