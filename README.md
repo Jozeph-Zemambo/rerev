@@ -4,11 +4,13 @@ An AR running buddy. A cartoon partner runs a couple of metres ahead of you on a
 
 > _Project story, inspiration and what we learned: to be written by Jozeph._
 
+> **Heads up: the laptop version is not the real thing.** ReReV is built for Android phones with AR (Chrome on an ARCore phone). On a laptop you only get a simulated preview: a fake runner, fake camera and fake sensors in a cartoon room. It shows how the app works, but it's a big downgrade from the actual experience of the buddy running ahead of you in your real hallway or street. If you can, try it on a phone: **https://rerev.jkunistuff.workers.dev**
+
 ## Three ways to run
 
 - **Plan a run:** pick a loop or a spot on the map, and the buddy leads you along a real OpenStreetMap route.
 - **Quick start:** just go. The buddy follows wherever you walk or run.
-- **Walk your course:** walk a route once (a loop, or out and back), then the buddy runs it with you.
+- **Walk your course:** walk a route once (a loop, or out and back), then the buddy runs it with you, or prop the phone up and race it.
 
 ## Try it on a laptop
 
