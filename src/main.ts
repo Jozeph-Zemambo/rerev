@@ -31,6 +31,7 @@ import type { QueueOptions } from './voice/speechQueue';
 import { formatDistance } from './ui/summary';
 import { Sounds } from './ui/sounds';
 import { Collectibles } from './world/collectibles';
+import { FollowMe, type FollowEvent } from './world/followMe';
 import { HazardMarkers } from './world/hazardMarkers';
 import { buildCourse, CourseRecording, courseRun, MIN_COURSE, type Course } from './world/course';
 import { CourseTrail } from './world/courseTrail';
@@ -45,6 +46,18 @@ const QUICK_LENGTH = 20;
 const QUICK_PACE = 1.6;
 /** Dashes are normally drawn this far ahead (Path's default). */
 const DRAW_AHEAD = 38;
+/**
+ * Following the runner, the line ahead is a guess along their direction: show only this much of
+ * it, so it doesn't reach into the house across the street before they've chosen a way.
+ */
+const FOLLOW_DRAW_AHEAD = 12;
+/** When the buddy reappears ahead of a runner who passed it, it pops in over this long. */
+const POP_TIME = 0.35;
+/**
+ * Following, a hallway corner looks blocked until the runner turns into it: the buddy only says
+ * the way is blocked if it still is after this long.
+ */
+const FOLLOW_BLOCKED_WAIT = 2;
 /** On an out-and-back, the way back is shown this far past the coming turnaround. */
 const PAST_TURN = 3;
 /** Depth, hazard planning and markers run at ~10 Hz; drawing runs every frame. */
@@ -151,6 +164,13 @@ scene.add(shadow);
 const partner = new Partner(path);
 const collectibles = new Collectibles();
 scene.add(collectibles.group);
+/** Quick start follows the runner: they choose the way, the path ahead bends to match. */
+const follow = new FollowMe();
+let following = false;
+/** Time since the buddy last reappeared ahead (POP_TIME or more once it's fully back). */
+let popAge = POP_TIME;
+/** When to say the way is blocked, if it still is then (following). */
+let blockedCallAt: number | null = null;
 let quip = 0;
 let starts = 0;
 let idleLine = 0;
@@ -413,6 +433,8 @@ async function startRun(next: RunMode) {
   heart.resetSimulation();
   unlockAudio();
   routeRun = next.kind === 'route' ? new RouteRun(next.goal.route) : null;
+  // The laptop preview's ?course=obstacles keeps the old fixed course, to check obstacles against.
+  following = next.kind === 'quick' && !(!arSupported && obstacleCourse());
   // Sensor permissions must be requested from this tap.
   if (next.kind === 'route') {
     gps.start();
@@ -513,7 +535,11 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   const lapLength = laps > 0 ? path.length / laps : 0;
   // On a loop, only draw less than a lap ahead so laps don't stack up on each other. (An
   // out-and-back is windowed to the next turnaround as you go.)
-  path.drawAhead = lapLength > 0 && partner.turnarounds.length === 0 ? Math.max(3, lapLength - 1.5) : DRAW_AHEAD;
+  path.drawAhead = lapLength > 0 && partner.turnarounds.length === 0 ? Math.max(3, lapLength - 1.5) : following ? FOLLOW_DRAW_AHEAD : DRAW_AHEAD;
+  follow.reset();
+  popAge = POP_TIME;
+  blockedCallAt = null;
+  mascot.root.scale.setScalar(1);
   collectibles.layout(path.length, Math.min(30, path.drawAhead));
   hud.showScore(0, 0);
   partner.reset(runnerS);
@@ -859,6 +885,24 @@ function startPreview() {
     hud.showControls(false);
     return;
   }
+  if (!routeRun && following) {
+    // Follow-me: the simulated runner picks its own way (down an L-shaped hallway, across a
+    // street, then back the way it came) and the path has to keep up.
+    sim.world = new PreviewWorld(false, 80);
+    scene.add(sim.world.group);
+    const walk = sim.world.addFollowCourse();
+    sim.walkPoints = resample(walk.points, 0.1).map((p, i) => ({
+      x: p.x + Math.sin(i * 0.12) * 0.04 + gauss() * 0.01,
+      z: p.z + Math.cos(i * 0.09) * 0.03 + gauss() * 0.01,
+    }));
+    sim.walkLengths = cumulativeLengths(sim.walkPoints);
+    sim.walk = { s: 0 };
+    const start = new THREE.Vector3(walk.points[0].x, 0, walk.points[0].z);
+    camera.position.set(start.x, 1.5, start.z);
+    // Tapped while facing a little off down the hallway, as in the field.
+    layRoute(demoRoute(start, walk.facing, QUICK_LENGTH), 0, [start], 0);
+    return;
+  }
   if (!routeRun) {
     sim.world = new PreviewWorld(true);
     scene.add(sim.world.group);
@@ -888,6 +932,11 @@ function startPreview() {
   );
   camera.position.set(start.x, 1.5, start.z);
   layRoute(routeRun.arPoints(), 0, [new THREE.Vector3(start.x, 0, start.z)], 0);
+}
+
+/** `?course=obstacles`: Quick start's preview runs the fixed obstacle course instead of following. */
+function obstacleCourse() {
+  return new URLSearchParams(location.search).get('course') === 'obstacles';
 }
 
 /**
@@ -993,7 +1042,19 @@ function advanceSim(dt: number, now: number, sensorTick: boolean): number {
   const stopped = partner.state === 'break' || partner.state === 'blocked' || partner.state === 'done' || partner.state === 'turn';
   const pace = (routeRun ? partner.goalPace : QUICK_PACE) * 0.85;
 
-  if (!routeRun) {
+  if (following) {
+    // Follow-me: walk our own way (the runner decides, so not even a blocked buddy stops us:
+    // round a hallway corner, the line ahead runs into the wall until we turn), sidestepping with
+    // the path when it bends round something. Only a breather stops us.
+    const walk = sim.walk!;
+    const from = path.project(camera.position);
+    if (!partner.breaking) walk.s = Math.min(sim.walkLengths.at(-1)!, walk.s + pace * dt);
+    const at = pointAlong(sim.walkPoints, sim.walkLengths, walk.s);
+    const look = pointAlong(sim.walkPoints, sim.walkLengths, walk.s + 3);
+    const side = path.detourAt(from + 0.3, { x: 0, z: 0 });
+    camera.position.set(at.x + side.x, world.groundHeight(at.x + side.x, at.z + side.z) + 1.5, at.z + side.z);
+    if (Math.hypot(look.x - at.x, look.z - at.z) > 0.3) camera.lookAt(look.x + side.x, 0.4, look.z + side.z);
+  } else if (!routeRun) {
     // Quick path: jog along the displayed (detoured) path, stopping behind the buddy when it stops.
     let limit = stopped ? partner.s - 1.2 : path.length;
     if (path.status.blockedAtS !== null) limit = Math.min(limit, path.status.blockedAtS - 0.6);
@@ -1025,7 +1086,17 @@ function advanceSim(dt: number, now: number, sensorTick: boolean): number {
     world.sampleDepth(camera, map, now);
     world.sampleGround(camera, map);
   }
-  return routeRun ? path.project(camera.position) : sim.runnerS;
+  return routeRun || following ? path.project(camera.position) : sim.runnerS;
+}
+
+/** The path ahead was re-laid to follow the runner. */
+function onFollow(event: FollowEvent) {
+  collectibles.extendTo(path.length);
+  if (event.kind !== 'respawn') return;
+  // Passed: the buddy pops back in ahead, already facing the new way.
+  popAge = 0;
+  path.tangentAt(partner.s, tangent);
+  mascot.root.rotation.y = Math.atan2(tangent.x, tangent.z);
 }
 
 function inverseTruth(p: RoutePoint) {
@@ -1070,8 +1141,10 @@ function stateMessage(state: PartnerState): string {
  */
 function announce(now: number, trackingLost: boolean) {
   if (partner.state !== lastState) {
+    blockedCallAt = null;
     if (partner.state === 'blocked') {
-      speak({ id: path.status.blockReason === 'drop' ? 'hazard_drop' : 'hazard_blocked' }, { interrupt: true });
+      if (following) blockedCallAt = now + FOLLOW_BLOCKED_WAIT;
+      else speak({ id: path.status.blockReason === 'drop' ? 'hazard_drop' : 'hazard_blocked' }, { interrupt: true });
     } else if (partner.state === 'done') {
       speak({ id: 'run_finish', bubble: `We made it! ${formatDistance(recorder.distanceSoFar)}. Great run.` }, { interrupt: true });
     } else if (partner.state === 'stairs' && lastState !== 'wait') {
@@ -1082,6 +1155,10 @@ function announce(now: number, trackingLost: boolean) {
     }
     lastState = partner.state;
     stateSince = now;
+  }
+  if (blockedCallAt !== null && now >= blockedCallAt) {
+    blockedCallAt = null;
+    speak({ id: path.status.blockReason === 'drop' ? 'hazard_drop' : 'hazard_blocked' }, { interrupt: true });
   }
   // Once is enough: on a lap course the same bag comes round every lap.
   if (path.status.detouring && !wasDetouring && now - lastDetourCall > DETOUR_CALL_GAP) {
@@ -1118,6 +1195,10 @@ function diagnosticRows(runnerS: number, trackingLost: boolean): [string, string
     ['map', `${map.size} cells, step ${map.walkableStep.toFixed(2)} m`],
     ['buddy', `${partner.state}, ${(partner.s - runnerS).toFixed(1)} m ahead, seen to +${(path.status.seenUntilS - runnerS).toFixed(1)} m`],
   ];
+  if (following) {
+    const h = follow.travel.heading;
+    rows.push(['follow', `${h ? `${Math.round((Math.atan2(h.x, -h.z) * 180) / Math.PI)}°` : 'no direction yet'}, ${follow.bends} bends, ${follow.respawns} catch-ups`]);
+  }
   if (routeRun) {
     const pairs = routeRun.aligner.pairCounts();
     const fit = routeRun.aligner.stats;
@@ -1243,6 +1324,10 @@ renderer.setAnimationLoop((time, frame) => {
       path.drawAhead = Math.min(DRAW_AHEAD, nextTurn - runnerS + PAST_TURN);
       collectibles.showAhead = Math.min(30, path.drawAhead);
     }
+    if (following) {
+      const event = follow.update(now, runner, runnerS, path, partner);
+      if (event) onFollow(event);
+    }
     path.update(dt, seconds, runnerS, map, now, sensorTick);
 
     // Heart rate → coach → buddy behaviour and what it says.
@@ -1253,11 +1338,12 @@ renderer.setAnimationLoop((time, frame) => {
     if (callout) speak(callout);
     partner.effort = coach.effort;
     partner.update(dt, runnerS);
-    recorder.update(now, runnerS, heart.bpm, partner.breaking);
+    // Following, the path's own distances bend and stretch with each re-lay: count what the runner covered.
+    recorder.update(now, following ? follow.travel.odometer : runnerS, heart.bpm, partner.breaking);
     announce(now, trackingLost);
 
     // Stars and coins: in AR the runner is the phone; in preview, the simulated runner on the path.
-    const feet = sim.world ? path.pointAt(runnerS, new THREE.Vector3()) : runner;
+    const feet = sim.world && !following ? path.pointAt(runnerS, new THREE.Vector3()) : runner;
     for (const kind of collectibles.update(dt, seconds, path, runnerS, feet)) {
       if (kind === 'star') {
         recorder.stars++;
@@ -1281,6 +1367,12 @@ renderer.setAnimationLoop((time, frame) => {
     const facing = ahead ? Math.atan2(tangent.x, tangent.z) : Math.atan2(-tangent.x, -tangent.z);
     const turn = Math.atan2(Math.sin(facing - mascot.root.rotation.y), Math.cos(facing - mascot.root.rotation.y));
     mascot.root.rotation.y += turn * Math.min(1, dt * 5);
+    if (popAge < POP_TIME) {
+      popAge += dt;
+      // Grows back with a little overshoot.
+      const t = Math.min(1, popAge / POP_TIME);
+      mascot.root.scale.setScalar(1 + 2.2 * (t - 1) ** 3 + 1.2 * (t - 1) ** 2);
+    }
     mascot.update(dt, seconds, partner.gait);
     shadow.position.set(point.x, point.y + 0.003, point.z);
 
@@ -1318,7 +1410,7 @@ addEventListener('resize', () => {
 });
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { rerev: { path, partner, mascot, map, camera, sim, coach, heart, commands, recorder, voice, hear, getRouteRun: () => routeRun } });
+  Object.assign(window, { rerev: { path, partner, mascot, map, camera, sim, follow, coach, heart, commands, recorder, voice, hear, getRouteRun: () => routeRun } });
 }
 
 void (async () => {

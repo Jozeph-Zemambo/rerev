@@ -119,6 +119,43 @@ export class PreviewWorld {
     return this.hits[0]?.point.y ?? 0;
   }
 
+  /**
+   * Follow-me preview: an L-shaped hallway (3.6 m wide, walls 1.2 m tall) with a crate in it,
+   * opening onto a street the walker crosses on a diagonal, with a bin on the far pavement,
+   * before turning back the way it came. Returns the walk, and the way the phone faced when the
+   * run was started: 12° off down the hallway, so a straight path would run into the wall.
+   */
+  addFollowCourse(): { points: RoutePoint[]; facing: THREE.Vector3 } {
+    const wall = new THREE.MeshStandardMaterial({ color: 0xd9d2c3, roughness: 0.9 });
+    const wood = new THREE.MeshStandardMaterial({ color: 0xb5793d, roughness: 0.8 });
+    const block = (x0: number, z0: number, x1: number, z1: number, height: number, material: THREE.Material) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x1 - x0), height, Math.abs(z1 - z0)), material);
+      mesh.position.set((x0 + x1) / 2, height / 2, (z0 + z1) / 2);
+      this.add(mesh);
+    };
+    // Hallway north (-z) from the start, then right (+x); outer and inner walls 15 cm thick.
+    block(-1.95, 1, -1.8, -13.95, 1.2, wall);
+    block(-1.95, -13.8, 11, -13.95, 1.2, wall);
+    block(1.8, 1, 1.95, -10.2, 1.2, wall);
+    block(1.8, -10.05, 11, -10.2, 1.2, wall);
+    // A crate a little right of the middle of the hallway.
+    block(-0.1, -6.25, 0.4, -6.75, 0.45, wood);
+    // A bin on the far pavement, across the street.
+    block(17.8, -21.8, 18.4, -22.4, 0.8, wood);
+    const points: RoutePoint[] = [
+      { x: 0, z: 0 },
+      { x: 0, z: -12 },
+      { x: 14, z: -12 },
+      { x: 18, z: -16.5 },
+      { x: 18, z: -27 },
+      { x: 18.6, z: -27.4 },
+      { x: 18.9, z: -26 },
+      { x: 19, z: -17 },
+    ];
+    const off = (12 * Math.PI) / 180;
+    return { points, facing: new THREE.Vector3(-Math.sin(off), 0, -Math.cos(off)) };
+  }
+
   /** A box sitting on the floor, e.g. a bag dropped on the lap course. */
   addBox(x: number, z: number, width: number, height: number, depth: number) {
     const box = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), new THREE.MeshStandardMaterial({ color: 0x5b6fb5, roughness: 0.7 }));

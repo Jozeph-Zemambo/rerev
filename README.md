@@ -12,7 +12,7 @@ npm run dev
 ```
 
 Open http://localhost:5173. Without AR, the app runs a **preview simulation**: a simulated runner, depth camera, GPS and compass.
-- **Quick start here:** a course with a crate on the path (watch it bend around), a ramp, stairs, and a barrier.
+- **Quick start here:** the buddy follows you. The simulated runner picks its own way: down an L-shaped hallway (started facing 12° off, so a straight line would hit the wall), round a crate, round the corner, diagonally across a street, past a bin, then back the way it came. The path ahead bends onto the runner's line within a second or two, and when the runner gets past the buddy it pops back in ahead. On a phone it's the same: walk where you like and the path follows. Add `?course=obstacles` for the old fixed course instead (a crate to bend around, a ramp, stairs up to a landing, and a barrier), to check obstacle handling against.
 - **Walk your course:** tap Record and the simulated walker loops round a table (add `?course=line` for an out-and-back along a corridor instead), then the buddy runs it with you, with a bag dropped on the course to steer round. Finish shows the summary over the view with Run again, New course and Exit. On a phone, you walk the course yourself: end near the start for laps, anywhere else to run there and back. AR stays open between runs, because the course only exists while it does. This is the one for a judging table.
 - **Plan a run:** a real OpenStreetMap route. The simulated compass starts 20° wrong and GPS jitters by ±4 m, so you can watch the route anchoring correct itself.
 
