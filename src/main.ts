@@ -534,9 +534,10 @@ function placeAt(start: THREE.Vector3, cameraMatrix: THREE.Matrix4) {
   const from = new THREE.Vector3().setFromMatrixPosition(cameraMatrix);
   const seeds = [start, new THREE.Vector3(from.x, start.y, from.z)];
   if (!routeRun) {
-    // Away from the phone; if the tap was straight below it, the way the camera faces.
-    const direction = new THREE.Vector3(start.x - from.x, 0, start.z - from.z);
-    if (direction.lengthSq() < 0.01) direction.set(0, 0, -1).transformDirection(cameraMatrix).setY(0);
+    // The way the camera faces. (Aiming from the phone to the tapped spot went sideways or even
+    // back towards you when the tap was near your feet.)
+    const direction = new THREE.Vector3(0, 0, -1).transformDirection(cameraMatrix).setY(0);
+    if (direction.lengthSq() < 0.01) direction.set(start.x - from.x, 0, start.z - from.z);
     direction.normalize();
     layRoute(demoRoute(start, direction, QUICK_LENGTH), start.y, seeds, 0);
     return;
