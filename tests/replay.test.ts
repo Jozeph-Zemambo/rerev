@@ -9,8 +9,9 @@ import { agreement, decodeDepth, encodeDepth, fetchAllRows, median, pathVsTrack,
  * y = 0, pitched 30° down, looking along -z at a box 30 cm tall whose front face is 2.8 m ahead
  * and which spans the whole corridor (so there is no way round it). Each depth reading is made by
  * casting the grid cell's ray through the same projection and pose and measuring how far along
- * the view's forward axis it hits, which is what the phone's depth API reports. The phone edges
- * forward slowly, so the box is 2.5-2.8 m away.
+ * the view's forward axis it hits, which is what the phone's depth API reports. The phone walks
+ * slowly towards it (the map only trusts something that far away once it has been seen from
+ * places a few tens of centimetres apart), so the box is 2-2.8 m away.
  */
 const BOX = { x0: -2, x1: 2, y0: 0, y1: 0.3, z0: -3.2, z1: -2.8 };
 const EYE = 1.4;
@@ -107,8 +108,8 @@ function syntheticSession(): Row[] {
   });
   let projectionSent = false;
   for (let t = 1.2; t <= 4.01; t += 0.2) {
-    // Edging towards the box at 10 cm/s, so every frame's pose and grid differ.
-    const camera = syntheticCamera(-(t - 1.2) * 0.1);
+    // Walking slowly towards the box at 30 cm/s, so every frame's pose and grid differ.
+    const camera = syntheticCamera(-(t - 1.2) * 0.3);
     const projection = Array.from(camera.projectionMatrix.elements).map(n => +n.toFixed(6));
     rows.push({
       t: +t.toFixed(2),
@@ -121,7 +122,8 @@ function syntheticSession(): Row[] {
       },
     });
     projectionSent = true;
-    if (Math.round(t * 10) % 5 === 0) {
+    // The phone logs a tick twice a second; it had the box by 2.5 s (as the replay should).
+    if (Math.round(t * 10) % 5 === 0 && t > 2.4) {
       rows.push({
         t: +(t + 0.01).toFixed(2),
         kind: 'tick',
