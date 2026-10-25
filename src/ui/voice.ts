@@ -16,6 +16,9 @@ export interface Voice {
  * recorded clip yet.
  */
 class BrowserSpeech {
+  /** Voice pitch (1 = normal). Each buddy gets its own, so blue and pink don't sound identical. */
+  pitch = 1.2;
+
   readonly available = 'speechSynthesis' in window;
   private voice: SpeechSynthesisVoice | null = null;
 
@@ -38,7 +41,7 @@ class BrowserSpeech {
     const utterance = new SpeechSynthesisUtterance(text);
     if (this.voice) utterance.voice = this.voice;
     utterance.rate = 1.05;
-    utterance.pitch = 1.2;
+    utterance.pitch = this.pitch;
     // Chrome sometimes never fires `end`; don't let one lost event stall the buddy.
     const fallback = setTimeout(done, 2000 + text.split(/\s+/).length * 600);
     utterance.onend = utterance.onerror = () => {
@@ -62,6 +65,11 @@ class BrowserSpeech {
 export class LineVoice implements Voice {
   muted = false;
   private readonly speech = new BrowserSpeech();
+
+  /** Pitch for lines read by the phone's own voice (recorded clips are unaffected). */
+  set pitch(pitch: number) {
+    this.speech.pitch = pitch;
+  }
   private readonly queue: SpeechQueue<LineId>;
   private readonly files = new Map<LineId, Promise<ArrayBuffer | null>>();
   private readonly clips = new Map<LineId, AudioBuffer>();

@@ -154,7 +154,13 @@ scene.add(path.group);
 const markers = new HazardMarkers();
 scene.add(markers.mesh);
 const mascot = new Mascot(savedBuddy());
-setupBuddyPicker(byId('buddy-pick'), savedBuddy(), color => mascot.setColor(color));
+/** The pink buddy speaks a little higher than the blue one, with the same phone voice. */
+const BUDDY_PITCH = { blue: 1.15, pink: 1.45 } as const;
+voice.pitch = BUDDY_PITCH[savedBuddy()];
+setupBuddyPicker(byId('buddy-pick'), savedBuddy(), color => {
+  mascot.setColor(color);
+  voice.pitch = BUDDY_PITCH[color];
+});
 mascot.root.visible = false;
 scene.add(mascot.root);
 const shadow = createShadow();
