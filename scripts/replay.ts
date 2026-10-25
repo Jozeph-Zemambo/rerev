@@ -36,6 +36,7 @@ import {
   AHEAD,
   agreement,
   BAND_NAMES,
+  CLEAR_BODY,
   cm,
   fetchAllRows,
   median,
@@ -268,7 +269,16 @@ function printSegment(segment: Segment, window: number, eventsOnly: boolean) {
 
   if (segment.kind === 'run') printPathVsTrack(segment);
   if (segment.kind === 'run') printPacing(segment);
+  if (segment.kind === 'run') printBuddyClearance(segment);
   if (segment.kind === 'run') printAgreement(segment);
+}
+
+/** How close the buddy came to what the map flagged. */
+function printBuddyClearance(segment: Segment) {
+  const c = segment.buddyClearance;
+  if (!c || c.seconds === 0) return;
+  const closest = Number.isFinite(c.closest) ? `${f2(c.closest)} m at ${c.at.toFixed(1)} s (${c.state})` : 'never near one';
+  console.log(`\n  Buddy vs flagged cells (its centre to their edge): closest ${closest}; within ${CLEAR_BODY} m for ${c.secondsWithin.toFixed(1)} of ${c.seconds.toFixed(0)} s`);
 }
 
 /** How steadily the buddy kept pace: time in each state, state switches, lead while walking. */

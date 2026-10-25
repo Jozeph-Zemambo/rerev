@@ -7,7 +7,7 @@ import { Partner, type PartnerState } from '../partner/partner';
 import { CourseRecording } from '../world/course';
 import { FollowMe } from '../world/followMe';
 import { Path, resample, type RoutePoint } from '../world/path';
-import { SurfaceMap, type DepthVerdict, type Hazard, type SurfaceProbe, type SurfaceTuning } from '../world/surfaceMap';
+import { SurfaceMap, type DepthVerdict, type Hazard, type HazardCell, type SurfaceProbe, type SurfaceTuning } from '../world/surfaceMap';
 
 /**
  * Replays a field recording (see FieldLog) through the app's own SurfaceMap, Path, Partner and
@@ -160,7 +160,18 @@ export type Segment = {
   pathVsTrack?: PathVsTrack;
   /** How the buddy paced the runner (runs only). */
   pacing?: Pacing;
+  /** How close the buddy (where it was drawn) came to cells flagged as hazards (runs only). */
+  buddyClearance?: BuddyClearance;
 };
+
+/**
+ * The closest the buddy's drawn position came to the edge of a flagged cell, when and in what
+ * state, and for how long it was within CLEAR_BODY of one.
+ */
+export type BuddyClearance = { closest: number; at: number; state: PartnerState | null; secondsWithin: number; seconds: number };
+
+/** Half the buddy's width plus a little: closer than this to a flagged cell, its body is touching it. */
+export const CLEAR_BODY = 0.35;
 
 /**
  * How steadily the buddy kept pace: time in each state, how often the state changed (every
@@ -409,6 +420,8 @@ class Replayer {
   /** Follow-me, when this run follows the runner. */
   private follow: FollowMe | null = null;
   private readonly centre = { x: 0, z: 0 };
+  private readonly buddyAt = new THREE.Vector3();
+  private readonly hazardScratch: HazardCell[] = [];
   /** The path ahead of the runner at each frame, and the runner's track, for pathVsTrack. */
   private aheadSamples: AheadSample[] = [];
   private track: TrackPoint[] = [];
@@ -476,6 +489,7 @@ class Replayer {
       recordedTicks: [],
       marks: [],
     };
+    if (kind === 'run' && replayable) segment.buddyClearance = { closest: Infinity, at: t, state: null, secondsWithin: 0, seconds: 0 };
     this.segments.push(segment);
     this.segment = segment;
     this.lastState = null;
@@ -735,6 +749,7 @@ class Replayer {
         this.path.update(dt, t, this.runnerS, this.map, t, sensorTick);
         this.partner.update(dt, this.runnerS);
         this.measurePacing(dt, at);
+        this.watchBuddyClearance(t, dt);
         if (t - this.lastPrune > PRUNE_EVERY) {
           this.lastPrune = t;
           this.map.prune(at.x, at.z, PRUNE_RADIUS);
@@ -804,6 +819,26 @@ class Replayer {
     } else {
       counts.respawns++;
       this.event('follow', `runner got past the buddy: path re-laid from s ${r2(event.fromS)}, buddy picks up at s ${r2(event.buddyS)}, ${heading}`, t);
+    }
+  }
+
+  /** How close the buddy, where it's drawn, is to the edge of the nearest flagged cell. */
+  private watchBuddyClearance(t: number, dt: number) {
+    const clearance = this.segment!.buddyClearance;
+    if (!clearance) return;
+    const buddy = this.path.pointAt(this.partner.s, this.buddyAt);
+    let closest = Infinity;
+    for (const cell of this.map.hazardCells(buddy.x, buddy.z, CLEAR_BODY + 0.2, t, this.hazardScratch)) {
+      const dx = Math.max(0, Math.abs(buddy.x - cell.x) - 0.1);
+      const dz = Math.max(0, Math.abs(buddy.z - cell.z) - 0.1);
+      closest = Math.min(closest, Math.hypot(dx, dz));
+    }
+    clearance.seconds += dt;
+    if (closest < CLEAR_BODY) clearance.secondsWithin += dt;
+    if (closest < clearance.closest) {
+      clearance.closest = closest;
+      clearance.at = r2(t);
+      clearance.state = this.partner.state;
     }
   }
 
@@ -950,10 +985,11 @@ class Replayer {
   }
 
   private describeDetour(t: number): string {
-    // What it's going round: the first hazard on the route's centre line ahead, as planDetours finds it.
+    // What it's going round: the first hazard near the route's centre line ahead (the buddy's
+    // body plus a margin either side of it, as planDetours keeps clear).
     for (let s = this.runnerS; s <= Math.min(this.path.length, this.runnerS + 6); s += 0.1) {
       const c = this.routeAt(s);
-      const hazard = this.map.hazardAt(c.x, c.z, 0.3, t);
+      const hazard = this.map.hazardAt(c.x, c.z, 0.45, t);
       if (hazard) return `detour round ${hazard === 'obstacle' ? 'an obstacle' : 'a drop'} at s ${r2(s)} (x ${r2(c.x)} z ${r2(c.z)}), ${(s - this.runnerS).toFixed(1)} m ahead`;
     }
     return 'detour (hazard no longer on the line)';
