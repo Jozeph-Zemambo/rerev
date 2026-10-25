@@ -14,15 +14,24 @@ const MAX_PACE = 4;
 /** Stops this far short of a blocked stretch. */
 const STOP_SHORT = 1.2;
 /**
- * Unseen ground doesn't hold the buddy back: phone depth while walking only marks floor a metre
- * or so ahead, and holding to it made the buddy stall and lurch every few seconds. Hazards still
- * stop or steer it once they're confirmed. Only when the camera has seen no ground ahead
- * of the runner (BLIND_AHEAD) for BLIND_AFTER seconds (pointing at the sky, or at their feet)
- * does it hold to what has been seen, SEEN_MARGIN short of the end of it, and ask to look ahead.
+ * Unseen ground mostly doesn't hold the buddy back: phone depth while walking only marks floor a
+ * metre or so ahead, and holding to it made the buddy stall and lurch every few seconds. But a
+ * hazard is only confirmed once you're a metre or two from it, by when a buddy keeping its lead
+ * would be in it. What gives one away sooner, when depth is good, is the seen ground stopping at
+ * it: walk towards a barrier and the seen edge stays put however far you go. So once the camera
+ * has been seeing floor FAR_EDGE ahead for FAR_TIME seconds (good depth; noisy depth only flashes
+ * that far now and then), and you then walk EDGE_STALL towards an edge that hasn't moved on by
+ * EDGE_STEP, the buddy holds to the seen ground, SEEN_MARGIN short of its end, and asks you to look
+ * ahead. It does the same when the camera has seen no ground ahead of you (BLIND_AHEAD) for
+ * BLIND_AFTER seconds (pointing at the sky, or at your feet).
  */
+const EDGE_STEP = 0.2;
+const EDGE_STALL = 0.8;
+const FAR_EDGE = 2.5;
+const FAR_TIME = 1.5;
 const BLIND_AHEAD = 0.5;
 const BLIND_AFTER = 3;
-const SEEN_MARGIN = 0.5;
+const SEEN_MARGIN = 0.8;
 /**
  * A blocked path has to stay clear this long before it sets off again: right at a hazard, noisy
  * depth can flick the block on and off a few times a second, and it shouldn't lurch with it.
@@ -71,6 +80,12 @@ export class Partner {
   private speed = 0;
   /** How long the camera has seen no ground ahead of the runner. */
   private blindFor = 0;
+  /** Where the seen ground ended when it last moved on, and where the runner was then. */
+  private edge = 0;
+  private runnerAtEdge = 0;
+  /** How long the seen ground has reached FAR_EDGE ahead, and whether it had when the edge last moved on. */
+  private farFor = 0;
+  private farSighted = false;
   /** How long the path has been clear since it was last blocked. */
   private clearFor = 0;
   private onBreak = false;
@@ -102,6 +117,10 @@ export class Partner {
     this.state = 'run';
     this.speed = 0;
     this.blindFor = 0;
+    this.edge = 0;
+    this.runnerAtEdge = runnerS;
+    this.farFor = 0;
+    this.farSighted = false;
     this.clearFor = 0;
     this.runner.reset(runnerS);
     this.onBreak = false;
@@ -152,8 +171,15 @@ export class Partner {
     const blockedAt = this.path.status.blockedAtS;
     const seenUntil = this.path.status.seenUntilS;
     this.blindFor = seenUntil - runnerS < BLIND_AHEAD ? this.blindFor + dt : 0;
-    const blind = this.blindFor >= BLIND_AFTER;
-    const seenLimit = blind ? seenUntil - SEEN_MARGIN : Infinity;
+    this.farFor = seenUntil - runnerS >= FAR_EDGE ? this.farFor + dt : 0;
+    // (A re-laid path can pull the seen edge back: start watching it again from there.)
+    if (seenUntil > this.edge + EDGE_STEP || seenUntil < this.edge - 0.3) {
+      this.edge = seenUntil;
+      this.runnerAtEdge = runnerS;
+      this.farSighted = this.farFor >= FAR_TIME;
+    }
+    const stalled = this.farSighted && runnerS - this.runnerAtEdge > EDGE_STALL;
+    const seenLimit = stalled || this.blindFor >= BLIND_AFTER ? seenUntil - SEEN_MARGIN : Infinity;
     const lead = this.s - runnerS;
     // Waiting for a runner who's stopped carries on until they move again; for one far behind,
     // until they're back within maxLead.

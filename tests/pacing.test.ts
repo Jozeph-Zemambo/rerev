@@ -132,6 +132,33 @@ test('unseen ground ahead does not hold it back; only a camera seeing nothing ah
   assert.ok(between(blind, 5, 10).every(s => s.lead <= 0.1 + 1e-6), 'stays on the ground it has seen');
 });
 
+test('walking towards something the camera could see past before, it holds to the ground it has seen', () => {
+  const path = straight();
+  const partner = new Partner(path);
+  // Clear depth, seeing floor 3.5 m ahead, until a wall at 20 m stops it seeing further.
+  const wall = 20;
+  const samples = run(partner, path, 25, () => 1.2, s => Math.min(s + 3.5, wall));
+  const furthest = Math.max(...samples.map(s => s.lead + s.runnerS));
+  assert.ok(furthest < wall - 0.5, `ran to ${furthest.toFixed(2)} m, the wall is at ${wall} m`);
+  assert.ok(samples.some(s => s.state === 'look'));
+  // Until it got near, it kept its lead.
+  assert.ok(between(samples, 4, 12).every(s => s.state === 'run' && Math.abs(s.lead - 2) < 0.3));
+});
+
+test('in noisy depth that now and then sees far for a moment, it never stops to look', () => {
+  const path = straight();
+  const partner = new Partner(path);
+  // Floor seen a metre ahead, and every couple of metres a flash of floor 3 m ahead, which the
+  // map remembers: the seen edge jumps out, then sits there while the runner walks up to it.
+  let remembered = 0;
+  const samples = run(partner, path, 40, () => 0.7, s => {
+    if (s % 2.5 < 0.05) remembered = Math.max(remembered, s + 3);
+    return Math.max(s + 1, remembered);
+  });
+  assert.ok(between(samples, 4, 40).every(s => s.state === 'run'), 'kept going');
+  assert.ok(between(samples, 6, 40).every(s => Math.abs(s.lead - 2) < 0.3));
+});
+
 test('a block flickering on and off holds the buddy still rather than lurching', () => {
   const path = straight();
   const partner = new Partner(path);
