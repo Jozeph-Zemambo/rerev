@@ -1,79 +1,48 @@
 # ReReV
 
-An AR running buddy. A cartoon partner runs a couple of metres ahead of you on a glowing path laid over the real ground, paces itself to your goal and your live heart rate, talks to you, steers around obstacles it sees through the phone's depth camera, and climbs stairs with you.
+An AR running buddy. A cartoon partner runs a couple of metres ahead of you on a glowing path laid over the real ground, paces itself to you and your live heart rate, talks to you, steers around obstacles it sees through the phone's depth camera, and climbs stairs with you.
 
 > _Project story, inspiration and what we learned: to be written by Jozeph._
 
-## Try it on a laptop (no phone needed)
+## Three ways to run
+
+- **Plan a run:** pick a loop or a spot on the map, and the buddy leads you along a real OpenStreetMap route.
+- **Quick start:** just go. The buddy follows wherever you walk or run.
+- **Walk your course:** walk a route once (a loop, or out and back), then the buddy runs it with you.
+
+## Try it on a laptop
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open http://localhost:5173. Without AR, the app runs a **preview simulation**: a simulated runner, depth camera, GPS and compass.
-- **Quick start here:** the buddy follows you. The simulated runner picks its own way: down an L-shaped hallway (started facing 12° off, so a straight line would hit the wall), round a crate, round the corner, diagonally across a street, past a bin, then back the way it came. The path ahead bends onto the runner's line within a second or two, and when the runner gets past the buddy it pops back in ahead. On a phone it's the same: walk where you like and the path follows. Add `?course=obstacles` for the old fixed course instead (a crate to bend around, a ramp, stairs up to a landing, and a barrier), to check obstacle handling against.
-- **Walk your course:** tap Record and the simulated walker loops round a table (add `?course=line` for an out-and-back along a corridor instead), then the buddy runs it with you, with a bag dropped on the course to steer round. Finish shows the summary over the view with Run again, New course and Exit. On a phone, you walk the course yourself: end near the start for laps, anywhere else to run there and back. AR stays open between runs, because the course only exists while it does. This is the one for a judging table.
-- **Plan a run:** a real OpenStreetMap route. The simulated compass starts 20° wrong and GPS jitters by ±4 m, so you can watch the route anchoring correct itself.
+Open http://localhost:5173. Without AR, the app runs a preview with a simulated runner, depth camera, GPS and compass. Add `?course=obstacles` for a fixed obstacle course in Quick start, or `?course=line` for an out-and-back in Walk your course.
 
 ## Run it on an Android phone
 
-WebXR AR needs Chrome on an ARCore phone, over https. The latest build is live at **https://rerev.jkunistuff.workers.dev** (`npm run deploy` publishes a new one to Cloudflare). To test code changes before deploying, keep the dev server running and tunnel it:
+WebXR AR needs Chrome on an ARCore phone, over https. The latest build is live at **https://rerev.jkunistuff.workers.dev**, and `npm run deploy` publishes a new one to Cloudflare. To try code changes without deploying, keep `npm run dev` running and tunnel it:
 
 ```bash
 cloudflared tunnel --no-autoupdate --url http://localhost:5173
 ```
 
-Open the printed `https://…trycloudflare.com` link on the phone.
-
-**Testing outdoors?** Add `?debug` to the link, or long-press the "Buddy" tile during a run, for a live readout of what the sensors are doing: tracking, depth points, ground-ray hits, GPS accuracy, compass, how many GPS and route matches the route fit is using, and how far you are from the drawn path.
+Then open the printed `https://…trycloudflare.com` link on the phone. Add `?debug` to the link, or long-press the Buddy tile during a run, for a live sensor readout.
 
 ## Heart rate from a Galaxy Watch
 
-**Over Bluetooth (anywhere, including outdoors):** install a Wear OS app that makes the watch act as a Bluetooth heart-rate strap (Heart for Bluetooth or HR2VP), then tap "Connect your watch" on the ReReV home screen and pick it. It reconnects by itself after that.
+- **Over Bluetooth (anywhere):** install a Wear OS app that broadcasts heart rate like a chest strap (Heart for Bluetooth or HR2VP), then tap "Connect your watch" on the home screen.
+- **Through the laptop (at a desk):** install HeartRateOnStream on the watch, run `npm run bridge` on the laptop, and set the watch app's OBS address to the IP it prints, port `4455`. No watch? `npm run bridge -- --simulate` fakes one.
 
-**Through the laptop (at a desk):**
+## Convex setup
 
-1. Install **HeartRateOnStream** on the Wear OS watch.
-2. On the Mac: `npm run bridge`. It prints the Mac's address.
-3. In the watch app, set the OBS address to that IP and port `4455`.
+`npx convex dev` creates the backend and writes `.env.local` (`VITE_CONVEX_URL`, `VITE_CONVEX_SITE_URL`). Then set these on the deployment:
 
-Readings go watch → bridge → Convex → phone in about a second. No watch? `npm run bridge -- --simulate` fakes a warm-up, a spike and a recovery. During a run, tap the heart tile for a manual demo override.
-
-## How it works
-
-```mermaid
-flowchart LR
-  Watch[Galaxy Watch<br/>HeartRateOnStream] -->|obs-websocket| Bridge[Mac bridge<br/>bridge/hr-bridge.mjs]
-  Bridge -->|HTTPS + token| Convex[(Convex<br/>heart rate, runs)]
-  Convex -->|live query| Phone
-  subgraph Phone[Phone: Chrome WebXR]
-    Depth[Depth camera + hit tests] --> Map[Surface map<br/>ground height, obstacles, drops]
-    Map --> Path[Path: drapes on ground,<br/>detours, stairs]
-    GPS[GPS + compass] --> Align[GPS↔AR alignment]
-    Align --> Path
-    Path --> Buddy[Buddy + coach]
-    Buddy --> Voice[Speech bubble + voice]
-  end
-  OSM[OpenStreetMap foot routing<br/>+ Open-Meteo elevation] --> Phone
-```
-
-- **Ground and obstacles** (`src/world/surfaceMap.ts`): depth points become 3D positions in the room and are judged by their height above the *local* ground. That way slopes are followed, things sticking up 15 cm+ are obstacles, and drop-offs are flagged. Thresholds widen with distance, since depth gets noisier further out. On map routes, kerbs (up to 20 cm) are stepped over rather than avoided. Hazards are remembered while out of view and cleared once bare floor is seen there again.
-- **Path** (`src/world/path.ts`): drapes onto learned ground, side-steps blocked stretches (±0.6 / 0.9 / 1.2 m), and turns red with no way around. It recognises stairs going up from a steadily rising height profile and climbs them; steps going down stop with a warning.
-- **Route anchoring** (`src/geo/alignment.ts`, `src/run/routeRun.ts`): the route starts at your feet, pointed by the compass. In the first few metres, before GPS can say much, "you're on the route here" matches (sideways only) fix the compass heading. After that, a weighted fit of the GPS track against AR tracking keeps it glued on. Progress along the route uses your direction of travel, so out-and-back streets don't confuse it. `npm run bench:align` simulates 40 runs per route with a 20° compass error and ±4 m GPS, for a runner on the pavement and one following the drawn line. The drawn route ends up about 0.5 m from the real one, and route matching never does worse than GPS alone.
-- **Callouts** (`src/run/callouts.ts`): the buddy calls turns about 30 m before them, plus kilometre splits, halfway and the final stretch.
-- **Voice lines** (`src/voice/lines.ts`): everything the buddy says out loud is a fixed line from one catalog, so it can be recorded once. The voice says the generic line ("Left turn coming up!", "One K done!"); the speech bubble carries the specifics ("Left onto Richard Rd in 30 m", "1 km done in 5:57"). A line plays `public/audio/lines/<id>.mp3` if that id is listed in `manifest.json`, and otherwise the browser voice reads its text. `npm run voice:lines` writes the recording script to `voice-script/lines.csv` (id, text, mood, delivery note, filename) and rebuilds the manifest from the clips in the folder.
-- **Talking to the buddy** (`src/voice/conversation.ts`, `convex/buddy.ts`): clear commands ("stop", "faster") and yes/no answers are matched on the phone. Anything softer goes to Claude Haiku, which picks an action and one of the lines allowed for it, so "I'm tired" gets "Want to take a break?" rather than an instant stop. Without an API key, soft phrases get a local guess and the rest "Sorry, I didn't catch that."
-- **Coach** (`src/partner/coach.ts`): plain rules on heart rate. Above the zone it eases off, then takes a breather and resumes on recovery; below the zone it picks up the pace. The summary shows how much of the run you spent in your zone, with a heart-rate chart.
+- `HR_BRIDGE_TOKEN`: any secret, also added to `.env.local`, so the laptop bridge can post heart rate (`npx convex env set HR_BRIDGE_TOKEN …`).
+- `ANTHROPIC_API_KEY` (optional): lets the buddy understand softer things you say, like "I'm tired". Without it, clear commands still work.
 
 ## Tests
 
-`npm test` runs the logic that can be checked without a phone: kerbs and steps in the surface map, the alignment fit, route progress on out-and-back streets, coach breathers, spoken callouts, voice intents, the line catalog, the yes/no flow and the speech queue. `npm run bench:align` is the slower alignment benchmark.
-
-## Stack
-
-three.js (WebXR), TypeScript, Vite, Convex, Leaflet with CARTO/OpenStreetMap tiles, OSRM foot routing (FOSSGIS), Open-Meteo elevation, Chrome speech recognition and synthesis.
-
-## Environment
-
-`npx convex dev` writes `.env.local` (`VITE_CONVEX_URL`, `VITE_CONVEX_SITE_URL`). The bridge token lives in `.env.local` as `HR_BRIDGE_TOKEN` and on the Convex deployment (`npx convex env set HR_BRIDGE_TOKEN …`).
+```bash
+npm test
+```
