@@ -28,6 +28,14 @@ const TRAVEL_WITHIN = 2;
 /** Ground at least this far above the path's floor, when looking for stairs, is a tread. */
 const RAISED_TREAD = 0.1;
 /**
+ * Stairs are wider than the buddy: at STAIRS_WIDE_SHARE of the treads, there's tread STAIRS_WIDE
+ * to either side of the line too, within TREAD_LEVEL of its height (field tests: a chair, a bin
+ * and walls the line ran into obliquely all had rising tops along the line, and nothing beside).
+ */
+const STAIRS_WIDE = 0.4;
+const STAIRS_WIDE_SHARE = 0.6;
+const TREAD_LEVEL = 0.12;
+/**
  * The buddy is about 0.5 m wide: its body reaches BODY_HALF_WIDTH either side of the line and
  * never overlaps a hazardous cell (measured to the edge of the 20 cm cell that flagged it). It
  * keeps BODY_MARGIN more (a cell: what's flagged is often only part of the thing, field tests
@@ -628,22 +636,31 @@ export class Path {
    */
   private detectStairs(i0: number, map: SurfaceMap, now: number): StairSpan | null {
     const base = this.ys[Math.max(0, i0 - 3)];
-    const tops: { k: number; h: number }[] = [];
-    for (let k = 0; k < 45 && i0 + k < this.count; k++) {
-      const x = this.xs[i0 + k];
-      const z = this.zs[i0 + k];
-      // Treads the phone's floor detection already found (raised ground) count as much as
-      // obstacle tops seen by depth: near ones are often learned as ground before depth confirms them.
+    const tops: { k: number; h: number; wide: boolean }[] = [];
+    // Treads the phone's floor detection already found (raised ground) count as much as
+    // obstacle tops seen by depth: near ones are often learned as ground before depth confirms them.
+    const topAt = (x: number, z: number) => {
       const ground = map.groundAt(x, z);
-      const top = map.obstacleTopAt(x, z, now) ?? (ground !== null && ground - base >= RAISED_TREAD ? ground : null);
+      return map.obstacleTopAt(x, z, now) ?? (ground !== null && ground - base >= RAISED_TREAD ? ground : null);
+    };
+    for (let k = 0; k < 45 && i0 + k < this.count; k++) {
+      const i = i0 + k;
+      const top = topAt(this.xs[i], this.zs[i]);
       if (top === null) continue;
       const h = top - base;
       const previous = tops.at(-1);
       // A sudden tall jump (a wall or railing on the landing) or a drop ends the staircase.
       if (previous && (h - previous.h > 0.35 || h < previous.h - 0.06)) break;
-      tops.push({ k, h: Math.max(h, previous?.h ?? h) });
+      // A tread runs across the way, to both sides of the line, at about the same height.
+      const across = [-STAIRS_WIDE, STAIRS_WIDE].every(side => {
+        const beside = topAt(this.xs[i] + this.nx[i] * side, this.zs[i] + this.nz[i] * side);
+        return beside !== null && Math.abs(beside - top) <= TREAD_LEVEL;
+      });
+      tops.push({ k, h: Math.max(h, previous?.h ?? h), wide: across });
     }
     if (tops.length < 4) return null;
+    // A bin, a chair or the edge of a wall the line runs into is narrower than any staircase.
+    if (tops.filter(t => t.wide).length < STAIRS_WIDE_SHARE * tops.length) return null;
     const first = tops[0];
     const highest = tops.reduce((best, t) => (t.h > best.h + 0.02 ? t : best), first);
     const run = (highest.k - first.k) * STEP;
