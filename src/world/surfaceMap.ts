@@ -53,6 +53,16 @@ const REFERENCE_RINGS = 7;
 const NOISE_FROM = 2;
 const NOISE_PER_METRE = 0.02;
 const MAX_GROUND_WEIGHT = 20;
+/**
+ * The phone's own floor detection (AR hit tests) is trusted over a ground height the map got
+ * wrong. If it keeps finding the floor lower than the map thinks, LOWER_VOTES times within
+ * LOWER_WINDOW seconds, agreeing within LOWER_AGREE, that cell's ground moves down to it.
+ * Only downward: a raised surface (a table, a step up) must never become "ground" this way.
+ */
+const TRUSTED_WEIGHT = 2;
+const LOWER_VOTES = 3;
+const LOWER_WINDOW = 1;
+const LOWER_AGREE = 0.04;
 
 type Vote = { count: number; at: number; confirmed: boolean };
 
@@ -65,6 +75,8 @@ type Cell = {
   drop: Vote;
   /** Upper envelope of obstacle points in this cell (absolute height), e.g. a stair tread. */
   top: number;
+  /** Trusted floor readings below this cell's ground, gathering towards moving it down. */
+  lower: { count: number; at: number; y: number };
 };
 
 const hazardActive = (vote: Vote, floorSeenAt: number, now: number) =>
@@ -84,6 +96,8 @@ export class SurfaceMap {
   walkableStep = 0;
   /** Field testing only: told about every judgement. */
   probe: SurfaceProbe | null = null;
+  /** How many cells have had their ground moved down to match the phone's floor detection. */
+  lowered = 0;
 
   /** How far a trusted ground sample may sit from the known ground and still count as ground. */
   groundTolerance(base: number) {
@@ -92,6 +106,7 @@ export class SurfaceMap {
 
   reset() {
     this.cells.clear();
+    this.lowered = 0;
   }
 
   get size() {
@@ -163,7 +178,10 @@ export class SurfaceMap {
     const reference = this.referenceGround(x, z);
     const rejected = reference !== null && Math.abs(y - reference) > tolerance;
     if (weight >= 1) this.probe?.ground(reference === null ? null : y - reference, !rejected, weight);
-    if (rejected) return;
+    if (rejected) {
+      if (weight >= TRUSTED_WEIGHT && y < reference!) this.voteLower(x, y, z, now);
+      return;
+    }
     const cell = this.cell(cellIndex(x), cellIndex(z));
     const total = cell.groundWeight + weight;
     cell.ground = cell.groundWeight > 0 ? (cell.ground * cell.groundWeight + y * weight) / total : y;
@@ -268,6 +286,26 @@ export class SurfaceMap {
     return out;
   }
 
+  private voteLower(x: number, y: number, z: number, now: number) {
+    const time = Number.isFinite(now) ? now : performance.now() / 1000;
+    const cell = this.cell(cellIndex(x), cellIndex(z));
+    const lower = cell.lower;
+    if (time - lower.at > LOWER_WINDOW || Math.abs(y - lower.y) > LOWER_AGREE) {
+      lower.count = 0;
+      lower.y = y;
+    }
+    lower.count++;
+    lower.at = time;
+    lower.y += (y - lower.y) / lower.count;
+    if (lower.count < LOWER_VOTES) return;
+    cell.ground = lower.y;
+    cell.groundWeight = 3;
+    cell.drop = { count: 0, at: -Infinity, confirmed: false };
+    cell.floorSeenAt = time;
+    lower.count = 0;
+    this.lowered++;
+  }
+
   private isObstacle(cell: Cell, now: number) {
     return hazardActive(cell.obstacle, cell.floorSeenAt, now);
   }
@@ -287,6 +325,7 @@ export class SurfaceMap {
         obstacle: { count: 0, at: -Infinity, confirmed: false },
         drop: { count: 0, at: -Infinity, confirmed: false },
         top: 0,
+        lower: { count: 0, at: -Infinity, y: 0 },
       };
       this.cells.set(key, cell);
     }
