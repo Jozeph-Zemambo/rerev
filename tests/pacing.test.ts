@@ -117,6 +117,19 @@ test('on a map route it still waits for a runner who stops', () => {
   assert.ok(samples.at(-1)!.lead < partner.maxLead + 0.5, `stopped ${samples.at(-1)!.lead.toFixed(2)} m ahead`);
 });
 
+test('unseen ground ahead does not hold it back; only a camera seeing nothing ahead for a while does', () => {
+  const path = straight();
+  const partner = new Partner(path);
+  // Depth while walking: ground seen only a metre ahead of the runner.
+  const short = run(partner, path, 20, () => 1, s => s + 1);
+  assert.ok(between(short, 4, 20).every(s => s.state === 'run' && Math.abs(s.lead - 2) < 0.3));
+  // Pointing at the sky: nothing seen ahead of the runner. Fine for a moment, then it holds back.
+  const blind = run(partner, path, 10, () => 1, s => s + 0.1);
+  assert.ok(between(blind, 0, 2.9).every(s => s.state !== 'look'), 'not straight away');
+  assert.ok(between(blind, 4, 10).some(s => s.state === 'look'), 'asks to look ahead');
+  assert.ok(between(blind, 5, 10).every(s => s.lead <= 0.1 + 1e-6), 'stays on the ground it has seen');
+});
+
 // ---------------------------------------------------------------- the pure parts
 
 const input = (p: Partial<PaceInput>): PaceInput => ({

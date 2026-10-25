@@ -561,7 +561,6 @@ class Replayer {
     if (mode === 'route') segment.notes.push('GPS re-anchoring of the route isn\'t logged, so the route stays where it was first laid.');
     this.partner.reset(0);
     this.partner.effort = 1;
-    this.partner.trustGroundAhead = mode === 'route';
     this.partner.pacing = mode === 'route' ? 'goal' : 'match';
     this.camera.fromArray(data.phone);
     this.previousCamera.copy(this.camera);
