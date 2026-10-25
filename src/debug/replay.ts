@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { COLS, ROWS, TOP, DepthSensor } from '../ar/depthSensor';
+import { buddyMotion } from '../partner/buddyMotion';
+import { pacePlan, type BuddyClip } from '../partner/buddyPace';
+import { BUDDY_HEIGHT } from '../partner/mascot';
 import { Partner, type PartnerState } from '../partner/partner';
 import { CourseRecording } from '../world/course';
 import { FollowMe } from '../world/followMe';
@@ -155,7 +158,32 @@ export type Segment = {
   follow?: { bends: number; respawns: number; extends: number };
   /** How far the path ahead of the runner stayed from where they actually went (runs only). */
   pathVsTrack?: PathVsTrack;
+  /** How the buddy paced the runner (runs only). */
+  pacing?: Pacing;
 };
+
+/**
+ * How steadily the buddy kept pace: time in each state, how often the state changed (every
+ * change, however brief), and its lead while the runner was walking (moving faster than
+ * WALKING over the last second or so).
+ */
+export type Pacing = {
+  seconds: number;
+  stateSeconds: Partial<Record<PartnerState, number>>;
+  switches: number;
+  /** Buddy lead in metres, sampled every replay step while the runner walked. */
+  walkingLeads: number[];
+  /** The runner's (smoothed) walking speed, sampled the same way. */
+  walkingSpeeds: number[];
+  /** Seconds spent in each animation clip the buddy would play (as the mascot picks them), and how often it changed. */
+  clipSeconds: Partial<Record<BuddyClip, number>>;
+  clipSwitches: number;
+  /** Times the buddy itself came to a stop (its own ground speed, not its state) after moving. */
+  buddyStops: number;
+};
+
+/** Runner speed above which they count as walking, for Pacing. */
+const WALKING = 0.3;
 
 /** Distances along the path ahead of the runner at which it's compared with their track. */
 export const AHEAD = [2, 3, 4, 5, 6];
@@ -386,6 +414,15 @@ class Replayer {
   private track: TrackPoint[] = [];
   private lastBlock: { s: number | null; reason: Hazard | null } = { s: null, reason: null };
   private wasDetouring = false;
+  private pacing: Pacing | null = null;
+  private pacingState: PartnerState | null = null;
+  private walkSpeed = 0;
+  /** The clip the mascot would be playing, for Pacing. */
+  private clip: BuddyClip | null = null;
+  private buddySpeed = 0;
+  private buddyMoving = false;
+  private lastBuddyS: number | null = null;
+  private readonly lastWalkAt = new THREE.Vector3();
   private streaks = { distrust: 0, stale: 0, repeated: 0 };
   private reportedDrift = 0;
   private readonly rows: readonly Row[];
@@ -449,6 +486,14 @@ class Replayer {
     this.wasDetouring = false;
     this.streaks = { distrust: 0, stale: 0, repeated: 0 };
     this.lastFrameT = null;
+    this.pacing = kind === 'run' ? { seconds: 0, stateSeconds: {}, switches: 0, walkingLeads: [], walkingSpeeds: [], clipSeconds: {}, clipSwitches: 0, buddyStops: 0 } : null;
+    this.pacingState = null;
+    this.walkSpeed = 0;
+    this.clip = null;
+    this.buddyMoving = false;
+    this.buddySpeed = 0;
+    this.lastBuddyS = null;
+    if (this.pacing) segment.pacing = this.pacing;
     return segment;
   }
 
@@ -689,6 +734,7 @@ class Replayer {
       if (running) {
         this.path.update(dt, t, this.runnerS, this.map, t, sensorTick);
         this.partner.update(dt, this.runnerS);
+        this.measurePacing(dt, at);
         if (t - this.lastPrune > PRUNE_EVERY) {
           this.lastPrune = t;
           this.map.prune(at.x, at.z, PRUNE_RADIUS);
@@ -705,6 +751,40 @@ class Replayer {
     this.streak('distrust', distrusted, row.t, 'depth distrusted (most near points read as a drop while floor hits agree): drop votes ignored');
     this.streak('stale', stale, row.t, 'depth grid identical to the last frame while the phone moved (stale depth image)');
     this.streak('repeated', repeated, row.t, 'no depth from the phone (frame logged again unchanged)');
+  }
+
+  private measurePacing(dt: number, at: THREE.Vector3) {
+    const pacing = this.pacing;
+    if (!pacing) return;
+    const state = this.partner.state;
+    if (this.pacingState === null) this.lastWalkAt.copy(at);
+    else if (state !== this.pacingState) pacing.switches++;
+    this.pacingState = state;
+    pacing.seconds += dt;
+    pacing.stateSeconds[state] = (pacing.stateSeconds[state] ?? 0) + dt;
+    // As Mascot.update picks the animation.
+    const motion = buddyMotion(this.partner.gait, this.clip === 'Run_Jogging' || this.clip === 'Run_JogForward', BUDDY_HEIGHT);
+    const runClip = this.clip === 'Run_JogForward' || this.clip === 'Run_Jogging' ? this.clip : null;
+    const clip = motion.kind === 'pace' ? pacePlan(motion.speed, BUDDY_HEIGHT, runClip).clip : motion.clip;
+    if (this.clip !== null && clip !== this.clip) pacing.clipSwitches++;
+    this.clip = clip;
+    pacing.clipSeconds[clip] = (pacing.clipSeconds[clip] ?? 0) + dt;
+    if (dt <= 0) return;
+    // The buddy's own speed over the ground, smoothed over ~0.3 s (a follow-me catch-up jump isn't movement).
+    const step = this.lastBuddyS === null ? 0 : this.partner.s - this.lastBuddyS;
+    this.lastBuddyS = this.partner.s;
+    if (Math.abs(step) < 0.5) this.buddySpeed += (step / dt - this.buddySpeed) * Math.min(1, dt / 0.3);
+    if (this.buddyMoving && this.buddySpeed < 0.1) {
+      this.buddyMoving = false;
+      pacing.buddyStops++;
+    } else if (!this.buddyMoving && this.buddySpeed > 0.3) this.buddyMoving = true;
+    const moved = Math.hypot(at.x - this.lastWalkAt.x, at.z - this.lastWalkAt.z);
+    this.lastWalkAt.copy(at);
+    this.walkSpeed += (moved / dt - this.walkSpeed) * Math.min(1, dt / 1);
+    if (this.walkSpeed > WALKING) {
+      pacing.walkingLeads.push(this.partner.s - this.runnerS);
+      pacing.walkingSpeeds.push(this.walkSpeed);
+    }
   }
 
   /** As in main.ts's frame loop: let follow-me re-lay the path, and say when it did. */

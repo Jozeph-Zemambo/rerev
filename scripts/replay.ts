@@ -267,7 +267,30 @@ function printSegment(segment: Segment, window: number, eventsOnly: boolean) {
   for (const line of lines) console.log(line.text);
 
   if (segment.kind === 'run') printPathVsTrack(segment);
+  if (segment.kind === 'run') printPacing(segment);
   if (segment.kind === 'run') printAgreement(segment);
+}
+
+/** How steadily the buddy kept pace: time in each state, state switches, lead while walking. */
+function printPacing(segment: Segment) {
+  const p = segment.pacing;
+  if (!p || p.seconds <= 0) return;
+  const states = Object.entries(p.stateSeconds)
+    .sort((a, b) => b[1] - a[1])
+    .map(([state, seconds]) => `${state} ${pct(seconds, p.seconds)}`)
+    .join(', ');
+  console.log(`\n  Pacing (${p.seconds.toFixed(0)} s): ${states}; ${p.switches} state switches (${((60 * p.switches) / p.seconds).toFixed(1)}/min); the buddy stopped dead ${p.buddyStops} times`);
+  const clips = Object.entries(p.clipSeconds)
+    .sort((a, b) => b[1] - a[1])
+    .map(([clip, seconds]) => `${clip} ${pct(seconds, p.seconds)}`)
+    .join(', ');
+  console.log(`    animation: ${clips}; ${p.clipSwitches} clip changes (${((60 * p.clipSwitches) / p.seconds).toFixed(1)}/min)`);
+  if (!p.walkingLeads.length) return;
+  const q = (values: number[], at: number) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(at * values.length))];
+  console.log(
+    `    while the runner walked (median ${f2(q(p.walkingSpeeds, 0.5))} m/s): ` +
+      `lead median ${f2(q(p.walkingLeads, 0.5))} m, 10–90% ${f2(q(p.walkingLeads, 0.1))}…${f2(q(p.walkingLeads, 0.9))} m`,
+  );
 }
 
 /** How well the path ahead kept to where the runner actually went. */
