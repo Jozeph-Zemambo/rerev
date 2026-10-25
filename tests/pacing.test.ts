@@ -130,6 +130,28 @@ test('unseen ground ahead does not hold it back; only a camera seeing nothing ah
   assert.ok(between(blind, 5, 10).every(s => s.lead <= 0.1 + 1e-6), 'stays on the ground it has seen');
 });
 
+test('a block flickering on and off holds the buddy still rather than lurching', () => {
+  const path = straight();
+  const partner = new Partner(path);
+  partner.reset(0);
+  let runnerS = 0;
+  for (let t = 0; t < 6; t += DT) {
+    partner.update(DT, runnerS);
+    runnerS += DT;
+  }
+  const at = partner.s;
+  // Something right ahead, seen in some frames and not others.
+  for (let t = 0; t < 3; t += DT) {
+    path.status.blockedAtS = Math.floor(t * 4) % 2 === 0 ? at + 1 : null;
+    partner.update(DT, runnerS);
+    assert.equal(partner.state, 'blocked', `${partner.state} at ${t.toFixed(2)} s`);
+  }
+  assert.ok(partner.s - at < 0.05, `crept ${(partner.s - at).toFixed(2)} m`);
+  path.status.blockedAtS = null;
+  for (let t = 0; t < 1; t += DT) partner.update(DT, runnerS);
+  assert.equal(partner.state, 'wait', 'clear, it goes back to waiting for the (stopped) runner');
+});
+
 // ---------------------------------------------------------------- the pure parts
 
 const input = (p: Partial<PaceInput>): PaceInput => ({
