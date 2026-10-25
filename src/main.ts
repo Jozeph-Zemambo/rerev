@@ -529,6 +529,8 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
     seeds: seeds.map(s => [r3(s.x), r3(s.z)]),
     laps,
     turnarounds: partner.turnarounds,
+    // Quick start following the runner: the replay re-lays it from the camera track the same way.
+    follow: following,
   });
   for (const seed of seeds) map.seedGround(seed.x, floorY, seed.z, 1);
   path.setRoute(points, floorY);
@@ -1102,6 +1104,7 @@ function advanceSim(dt: number, now: number, sensorTick: boolean): number {
 /** The path ahead was re-laid to follow the runner. */
 function onFollow(event: FollowEvent) {
   collectibles.extendTo(path.length);
+  if (event.kind !== 'extend') field.event('follow', { ...event, heading: follow.travel.heading, buddyS: r3(partner.s), pathLength: r3(path.length) });
   if (event.kind !== 'respawn') return;
   // Passed: the buddy pops back in ahead, already facing the new way.
   popAge = 0;
