@@ -34,6 +34,13 @@ type OsrmResponse = {
 
 /** A walking route through the given waypoints, with turn steps and an elevation profile. */
 export async function planRoute(waypoints: LatLon[], signal?: AbortSignal): Promise<PlannedRoute> {
+  return withElevation(await walkingRoute(waypoints, signal), signal);
+}
+
+export type WalkingRoute = Omit<PlannedRoute, 'elevation' | 'climb'>;
+
+/** OSRM's walking route through the waypoints, without the elevation profile. */
+export async function walkingRoute(waypoints: LatLon[], signal?: AbortSignal): Promise<WalkingRoute> {
   const coords = waypoints.map(p => `${p.lon.toFixed(6)},${p.lat.toFixed(6)}`).join(';');
   const response = await fetch(`${FOOT_ROUTER}/${coords}?overview=full&geometries=geojson&steps=true`, { signal });
   if (!response.ok) throw new Error(`Route service returned ${response.status}`);
@@ -51,18 +58,87 @@ export async function planRoute(waypoints: LatLon[], signal?: AbortSignal): Prom
       travelled += step.distance;
     }
   }
-
-  const elevation = await fetchElevationProfile(points, signal).catch(() => []);
-  let climb = 0;
-  for (let i = 1; i < elevation.length; i++) climb += Math.max(0, elevation[i].metres - elevation[i - 1].metres);
-  return { points, distance: route.distance, steps, elevation, climb };
+  return { points, distance: route.distance, steps };
 }
 
-/** Waypoints for a rough loop of about `km` from a start, heading off along `bearing` first. */
-export function loopWaypoints(start: LatLon, km: number, bearing: number): LatLon[] {
+/** Adds the elevation profile and total climb (none if the elevation service is down). */
+export async function withElevation(route: WalkingRoute, signal?: AbortSignal): Promise<PlannedRoute> {
+  const elevation = await fetchElevationProfile(route.points, signal).catch(() => []);
+  let climb = 0;
+  for (let i = 1; i < elevation.length; i++) climb += Math.max(0, elevation[i].metres - elevation[i - 1].metres);
+  return { ...route, elevation, climb };
+}
+
+/** How much of the target the waypoint triangle's own perimeter is, before any tuning. */
+const LOOP_FIRST_GUESS = 0.8;
+
+/**
+ * Waypoints for a rough loop of about `km` from a start, heading off along `bearing` first.
+ * `stretch` scales the triangle: `planLoop` tunes it until the street route comes out right.
+ */
+export function loopWaypoints(start: LatLon, km: number, bearing: number, stretch = 1): LatLon[] {
   // Streets add detours, so aim the triangle a little short of the target distance.
-  const side = (km * 1000 * 0.8) / 3;
+  const side = (km * 1000 * LOOP_FIRST_GUESS * stretch) / 3;
   return [start, destination(start, bearing, side), destination(start, bearing + 60, side), start];
+}
+
+/** A loop within this fraction of the target distance is close enough. */
+export const LOOP_TOLERANCE = 0.1;
+/** Route requests per loop at most: the first guess plus re-plans. */
+export const LOOP_MAX_TRIES = 4;
+
+export type LoopTry = { stretch: number; distance: number };
+
+/**
+ * The next triangle stretch to try for a loop of `target` metres. Street distance grows roughly
+ * in proportion to the triangle, so: a secant through the last two tries when they slope the
+ * right way, otherwise a proportional rescale of the last one. Steps are capped so one odd
+ * route (a river, a dead end) can't throw the loop across town.
+ */
+export function nextLoopStretch(tries: LoopTry[], target: number): number {
+  const last = tries[tries.length - 1];
+  let next = (last.stretch * target) / last.distance;
+  const prev = tries[tries.length - 2];
+  if (prev && prev.stretch !== last.stretch) {
+    const slope = (last.distance - prev.distance) / (last.stretch - prev.stretch);
+    if (slope > 0 && Number.isFinite(slope)) next = last.stretch + (target - last.distance) / slope;
+  }
+  const capped = Math.min(last.stretch * 2, Math.max(last.stretch * 0.5, next));
+  return Math.min(3, Math.max(0.15, capped));
+}
+
+export const loopError = (distance: number, target: number) => Math.abs(distance - target) / target;
+
+/**
+ * Tries loop sizes one after another (never in parallel) until a route lands within the
+ * tolerance of `target` metres, and returns the closest one. `attempt` plans the route for a
+ * stretch; aborting its signal stops the search.
+ */
+export async function fitLoop<R extends { distance: number }>(
+  target: number,
+  attempt: (stretch: number) => Promise<R>,
+  maxTries = LOOP_MAX_TRIES,
+): Promise<{ route: R; tries: LoopTry[] }> {
+  const tries: LoopTry[] = [];
+  let best: R | null = null;
+  let stretch = 1;
+  for (let i = 0; i < maxTries; i++) {
+    const route = await attempt(stretch);
+    tries.push({ stretch, distance: route.distance });
+    if (!best || loopError(route.distance, target) < loopError(best.distance, target)) best = route;
+    if (loopError(route.distance, target) <= LOOP_TOLERANCE) break;
+    const next = nextLoopStretch(tries, target);
+    // The same triangle again would give the same streets.
+    if (tries.some(t => Math.abs(t.stretch - next) < 0.01 * next)) break;
+    stretch = next;
+  }
+  return { route: best!, tries };
+}
+
+/** A loop of about `km` from `start`, sized to the streets, with its elevation profile. */
+export async function planLoop(start: LatLon, km: number, bearing: number, signal?: AbortSignal): Promise<PlannedRoute & { tries: LoopTry[] }> {
+  const { route, tries } = await fitLoop(km * 1000, stretch => walkingRoute(loopWaypoints(start, km, bearing, stretch), signal));
+  return { ...(await withElevation(route, signal)), tries };
 }
 
 async function fetchElevationProfile(points: LatLon[], signal?: AbortSignal) {
