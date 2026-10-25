@@ -63,6 +63,8 @@ const TURN_SLOW = 2;
 const TURN_SPEED = 0.35;
 const TURN_PAUSE = 0.4;
 const TURN_WAIT = 1.5;
+/** A runner pausing within this far of a turnaround is turning round, not stopping: no waiting. */
+const TURN_GRACE = 3;
 
 /**
  * Paces itself against the runner (see pacing.ts): stays a couple of metres ahead at their own
@@ -205,7 +207,8 @@ export class Partner {
     const lead = this.s - runnerS;
     // Waiting for a runner who's stopped carries on until they move again; for one far behind,
     // until they're back within maxLead.
-    const waitFor = runner.stopped || lead > this.maxLead + (this.state === 'wait' ? 0 : FAR_BEHIND);
+    const turningRound = this.turnarounds.some(t => Math.abs(runnerS - t) < TURN_GRACE);
+    const waitFor = (runner.stopped && !turningRound) || lead > this.maxLead + (this.state === 'wait' ? 0 : FAR_BEHIND);
 
     const blockedHere = blockedAt !== null && blockedAt - this.s < STOP_SHORT + 0.05;
     this.clearFor = blockedHere ? 0 : this.clearFor + dt;
