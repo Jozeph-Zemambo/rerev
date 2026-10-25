@@ -9,6 +9,7 @@
  */
 
 import type * as buddy from "../buddy.js";
+import type * as fieldLog from "../fieldLog.js";
 import type * as heartRate from "../heartRate.js";
 import type * as http from "../http.js";
 import type * as runs from "../runs.js";
@@ -21,6 +22,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   buddy: typeof buddy;
+  fieldLog: typeof fieldLog;
   heartRate: typeof heartRate;
   http: typeof http;
   runs: typeof runs;
