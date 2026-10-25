@@ -2,8 +2,13 @@ import { clipPath, LINES, lineById, type LineId } from '../voice/lines';
 import { SpeechQueue, type QueueOptions } from '../voice/speechQueue';
 
 /** The buddy's speaking voice: says lines from the catalog by id. */
+export type SayOptions = QueueOptions & {
+  /** Read at this pitch instead of the voice's own (when two buddies take turns, as at the booth). */
+  pitch?: number;
+};
+
 export interface Voice {
-  say(id: LineId, options?: QueueOptions): void;
+  say(id: LineId, options?: SayOptions): void;
   /** Talking, or has something queued to say. */
   readonly busy: boolean;
   /** Stop talking and forget anything queued. */
@@ -36,12 +41,12 @@ class BrowserSpeech {
     speechSynthesis.addEventListener('voiceschanged', pick);
   }
 
-  speak(text: string, done: () => void) {
+  speak(text: string, done: () => void, pitch = this.pitch) {
     if (!this.available) return done();
     const utterance = new SpeechSynthesisUtterance(text);
     if (this.voice) utterance.voice = this.voice;
     utterance.rate = 1.05;
-    utterance.pitch = this.pitch;
+    utterance.pitch = pitch;
     // Chrome sometimes never fires `end`; don't let one lost event stall the buddy.
     const fallback = setTimeout(done, 2000 + text.split(/\s+/).length * 600);
     utterance.onend = utterance.onerror = () => {
@@ -70,7 +75,7 @@ export class LineVoice implements Voice {
   set pitch(pitch: number) {
     this.speech.pitch = pitch;
   }
-  private readonly queue: SpeechQueue<LineId>;
+  private readonly queue: SpeechQueue<{ id: LineId; pitch?: number }>;
   private readonly files = new Map<LineId, Promise<ArrayBuffer | null>>();
   private readonly clips = new Map<LineId, AudioBuffer>();
   private source: AudioBufferSourceNode | null = null;
@@ -79,18 +84,18 @@ export class LineVoice implements Voice {
   /** `context` returns the app's shared AudioContext once a tap has unlocked it. */
   constructor(context: () => AudioContext | null) {
     this.context = context;
-    this.queue = new SpeechQueue<LineId>(
-      (id, done) => this.play(id, done),
+    this.queue = new SpeechQueue(
+      ({ id, pitch }, done) => this.play(id, done, pitch),
       () => this.cut(),
       () => performance.now() / 1000,
     );
     void this.loadManifest();
   }
 
-  say(id: LineId, options?: QueueOptions) {
+  say(id: LineId, options: SayOptions = {}) {
     if (this.muted) return;
     this.decodeAll();
-    this.queue.add(id, options);
+    this.queue.add({ id, pitch: options.pitch }, options);
   }
 
   get busy() {
@@ -147,11 +152,11 @@ export class LineVoice implements Voice {
     }
   }
 
-  private play(id: LineId, done: () => void) {
+  private play(id: LineId, done: () => void, pitch?: number) {
     const ctx = this.context();
     const clip = this.clips.get(id);
     if (!ctx || ctx.state !== 'running' || !clip) {
-      this.speech.speak(lineById(id).text, done);
+      this.speech.speak(lineById(id).text, done, pitch);
       return;
     }
     const source = ctx.createBufferSource();

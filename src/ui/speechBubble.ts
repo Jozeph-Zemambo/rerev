@@ -39,14 +39,17 @@ export class SpeechBubble {
     this.hideAt = now + Math.max(3.5, words * 0.42);
   }
 
-  /** Keep the bubble over the buddy's head. Hides itself when its time is up or the head is off-screen. */
-  update(buddyFeet: THREE.Vector3, camera: THREE.Camera, now: number) {
+  /**
+   * Keep the bubble over the buddy's head. Hides itself when its time is up or the head is
+   * off-screen. `height` is the buddy's, when it isn't full size (a booth figurine).
+   */
+  update(buddyFeet: THREE.Vector3, camera: THREE.Camera, now: number, height = BUDDY_HEIGHT) {
     if (this.el.hidden) return;
     if (now > this.hideAt) {
       this.el.hidden = true;
       return;
     }
-    this.world.copy(buddyFeet).setY(buddyFeet.y + HEAD_HEIGHT).project(camera);
+    this.world.copy(buddyFeet).setY(buddyFeet.y + HEAD_HEIGHT * (height / BUDDY_HEIGHT)).project(camera);
     const behind = this.world.z > 1;
     // Follow the head, but keep the whole bubble on screen, however long the line is.
     const half = Math.min(this.el.offsetWidth / 2 + 12, innerWidth / 2);
@@ -58,5 +61,10 @@ export class SpeechBubble {
 
   hide() {
     this.el.hidden = true;
+  }
+
+  /** Take it out of the page for good. */
+  remove() {
+    this.el.remove();
   }
 }
