@@ -68,3 +68,11 @@ test('with no way past, the line stops short of the gap instead of squeezing thr
   assert.equal(path.status.blockReason, 'obstacle');
 });
 
+test('rising tops on something narrow are not stairs; across the way they are', () => {
+  // Tops rising 17 cm every 30 cm from 4 m ahead, up to a 68 cm landing.
+  const rise = (z: number) => 0.17 * Math.min(4, Math.max(1, Math.ceil((-4 - z) / 0.3 + 1e-6)));
+  const chair = hallway([{ x0: -0.2, x1: 0.2, z0: -5.2, z1: -4, top: rise }]);
+  assert.equal(chair.stairs.length, 0, 'a 40 cm wide thing is no staircase');
+  const stairs = hallway([{ x0: -1, x1: 1, z0: -5.2, z1: -4, top: rise }]);
+  assert.equal(stairs.stairs.length, 1, 'a 2 m wide one is');
+});
