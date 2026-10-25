@@ -127,6 +127,8 @@ export class Path {
   private mx = new Float32Array(0);
   private mz = new Float32Array(0);
   private morphing = false;
+  /** The line ahead was re-laid since detours were last planned. */
+  private replan = false;
   /** First sample that may still be gliding. */
   private morphFrom = 0;
   private lastProjected = 0;
@@ -253,6 +255,15 @@ export class Path {
       }
     });
     this.computeSideways(keep - 5);
+    // A detour the old line was bending round carries over onto the new one (the next plan
+    // adjusts it), so the line doesn't swing back through what it was going round meanwhile.
+    for (let i = keep + 1; i < Math.min(count, old.count); i++) {
+      const side = old.offset[i] * (old.nx[i] * this.nx[i] + old.nz[i] * this.nz[i]);
+      this.offset[i] = this.offsetTarget[i] = side;
+      this.mx[i] -= this.nx[i] * side;
+      this.mz[i] -= this.nz[i] * side;
+    }
+    this.replan = true;
     this.morphFrom = this.morphing ? Math.min(this.morphFrom, keep + 1) : keep + 1;
     this.morphing = true;
     this.lastProjected = Math.min(this.lastProjected, count - 1);
@@ -396,7 +407,9 @@ export class Path {
     const i1 = this.index(runnerS + TERRAIN_AHEAD);
 
     this.drape(i0, i1, map, dt);
-    if (checkHazards) {
+    // A re-laid line is planned straight away, not at the next hazard check.
+    if (checkHazards || this.replan) {
+      this.replan = false;
       this.planDetours(runnerS, map, now);
       this.status.seenUntilS = this.seenUntil(runnerS, map);
     }
