@@ -9,10 +9,9 @@
  *
  * Options:
  *   --run N               only segment N (runs and course recordings, as numbered in the output)
- *   --tune k=v[,k=v]      override SurfaceMap thresholds, e.g. --tune obstacleMin=0.2,dropVotes=6
+ *   --tune k=v[,k=v]      override SurfaceMap thresholds, e.g. --tune obstacleMin=0.2,dropFrames=6
  *   --walkable-step M     override the walkable step logged at run start
  *   --pace M/S            buddy pace on a map route (not logged; default 1.6)
- *   --hits-with-time      give floor hits a timestamp (the app doesn't; changes hazard clearing)
  *   --logged-depth-only   feed only the logged depth frames (5x a second). By default each is
  *                         also fed a tick earlier, standing in for the unlogged one in between
  *   --no-breaks           don't put the buddy on a break when the phone's log says it was
@@ -67,7 +66,7 @@ for (let i = 0; i < argv.length; i++) {
   } else if (arg.startsWith('--')) flags.add(arg);
   else positional.push(arg);
 }
-const KNOWN_FLAGS = ['--follow', '--fixed', '--hits-with-time', '--logged-depth-only', '--no-breaks', '--dump-marks', '--events-only', '--refresh', '--offline', '--help'];
+const KNOWN_FLAGS = ['--follow', '--fixed', '--logged-depth-only', '--no-breaks', '--dump-marks', '--events-only', '--refresh', '--offline', '--help'];
 for (const flag of flags) if (!KNOWN_FLAGS.includes(flag)) fail(`Unknown option ${flag}`);
 if (flags.has('--help')) {
   console.log(readFileSync(new URL(import.meta.url), 'utf8').split('*/')[0].replace(/^\/\*\*?|^ \* ?/gm, ''));
@@ -381,7 +380,6 @@ const options: ReplayOptions = {
   tuning,
   walkableStep: number('--walkable-step'),
   pace: number('--pace'),
-  hitsWithTime: flags.has('--hits-with-time'),
   fillDepthGaps: !flags.has('--logged-depth-only'),
   mirrorBreaks: !flags.has('--no-breaks'),
   followMe: flags.has('--follow') ? true : flags.has('--fixed') ? false : undefined,

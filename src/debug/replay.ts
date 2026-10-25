@@ -110,6 +110,7 @@ export type EventKind =
   | 'stale'
   | 'repeated'
   | 'rebase'
+  | 'drift'
   | 'gap'
   | 'mark'
   | 'follow'
@@ -210,11 +211,6 @@ export type ReplayOptions = {
   walkableStep?: number;
   /** Goal pace (m/s) on a map route; it isn't recorded. Quick runs and courses use the app's 1.6. */
   pace?: number;
-  /**
-   * Pass the frame time to addGroundSample. The app doesn't, so floor hits never mark a cell as
-   * seen bare (only depth does); turning this on changes how fast hazards clear.
-   */
-  hitsWithTime?: boolean;
   /** Put the buddy on a break whenever the phone's log says it was on one (default true). */
   mirrorBreaks?: boolean;
   /**
@@ -391,6 +387,7 @@ class Replayer {
   private lastBlock: { s: number | null; reason: Hazard | null } = { s: null, reason: null };
   private wasDetouring = false;
   private streaks = { distrust: 0, stale: 0, repeated: 0 };
+  private reportedDrift = 0;
   private readonly rows: readonly Row[];
   private readonly options: ReplayOptions;
 
@@ -494,7 +491,10 @@ class Replayer {
       // startCourseRun seeds the walked course (built.points, not logged); the run's points follow it.
       for (const p of resample(points, 0.5)) map.seedGround(p.x, data.floorY, p.z, 0.4);
       segment.notes.push('Course seeding follows the run\'s route (the walked course itself isn\'t logged).');
-    } else map.reset();
+    } else {
+      map.reset();
+      this.reportedDrift = 0;
+    }
     map.walkableStep = this.options.walkableStep ?? data.walkableStep;
     this.partner.turnarounds = data.turnarounds ?? [];
     for (const [x, z] of data.seeds ?? []) map.seedGround(x, data.floorY, z, 1);
@@ -546,6 +546,7 @@ class Replayer {
     this.floorY = next?.floorY ?? median(hits) ?? camera.y - 1.4;
     if (!next) segment.notes.push('No run followed this recording; floor height taken from the floor hits.');
     this.map.reset();
+    this.reportedDrift = 0;
     this.map.walkableStep = 0;
     this.map.seedGround(camera.x, this.floorY, camera.z, 1);
     this.recording.clear();
@@ -662,7 +663,7 @@ class Replayer {
       // Floor hits arrived over the frame; spread them over the steps.
       const from = Math.floor((k * hits.length) / steps);
       const to = Math.floor(((k + 1) * hits.length) / steps);
-      for (const [x, y, z] of hits.slice(from, to)) rebased += this.groundSample(x, y, z, t);
+      rebased += this.floorHits(hits.slice(from, to), t);
 
       if (running) {
         this.runnerS = this.path.project(at);
@@ -745,23 +746,41 @@ class Replayer {
     this.aheadSamples.push({ along, points });
   }
 
-  /** One floor hit, as GroundRays.sample feeds it. Returns 1 if it moved a cell's ground. */
-  private groundSample(x: number, y: number, z: number, t: number): number {
+  /**
+   * One XR frame's floor hits, as GroundRays.sample feeds them. Reports cells whose ground moved
+   * to match (re-based) and, once it adds up to 3 cm, the map shifting with the phone's world.
+   * Returns how many cells were re-based.
+   */
+  private floorHits(hits: number[][], t: number): number {
     const map = this.map;
     const before = map.rebased;
-    const reference = map.referenceGround(x, z);
-    if (this.options.hitsWithTime) map.addGroundSample(x, y, z, 2, map.groundTolerance(0.1), t);
-    else map.addGroundSample(x, y, z, 2, map.groundTolerance(0.1));
-    if (map.rebased === before) return 0;
-    const ground = map.groundAt(x, z) ?? y;
-    const moved = reference === null ? '' : ` (${cm(ground - reference)} from ${r2(reference)})`;
-    this.event('rebase', `floor detection re-based the cell at x ${r2(x)} z ${r2(z)} to y ${r2(ground)}${moved}`, t, {
-      x,
-      z,
-      ground,
-      shift: reference === null ? null : ground - reference,
+    const drift = map.drift;
+    const references = hits.map(([x, , z]) => map.referenceGround(x, z));
+    map.addFloorHits(hits.map(([x, y, z]) => ({ x, y, z })), t);
+    if (Math.abs(map.drift - this.reportedDrift) >= 0.03) {
+      this.event('drift', `floor detection says the phone's world moved: map shifted ${cm(map.drift - this.reportedDrift)} (${cm(map.drift)} in all)`, t, {
+        drift: map.drift,
+      });
+      this.reportedDrift = map.drift;
+    }
+    const rebased = map.rebased - before;
+    if (rebased === 0) return 0;
+    const shifted = map.drift - drift;
+    const seen = new Set<string>();
+    hits.forEach(([x, , z], i) => {
+      const ground = map.groundAt(x, z);
+      const reference = references[i];
+      const key = `${Math.floor(x / 0.2)},${Math.floor(z / 0.2)}`;
+      if (ground === null || reference === null || seen.has(key) || Math.abs(ground - reference - shifted) < 0.04) return;
+      seen.add(key);
+      this.event('rebase', `floor detection re-based the cell at x ${r2(x)} z ${r2(z)} to y ${r2(ground)} (${cm(ground - reference - shifted)} from ${r2(reference + shifted)})`, t, {
+        x,
+        z,
+        ground,
+        shift: ground - reference - shifted,
+      });
     });
-    return 1;
+    return rebased;
   }
 
   /**
