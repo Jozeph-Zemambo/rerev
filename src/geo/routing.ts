@@ -69,15 +69,17 @@ export async function withElevation(route: WalkingRoute, signal?: AbortSignal): 
   return { ...route, elevation, climb };
 }
 
-/** How much of the target the waypoint triangle's own perimeter is, before any tuning. */
-const LOOP_FIRST_GUESS = 0.8;
+/**
+ * How much of the target the waypoint triangle's own perimeter is, before any tuning. Street
+ * routes around MRU came out about 1.25x the triangle (1-5 km loops, three bearings each).
+ */
+const LOOP_FIRST_GUESS = 0.65;
 
 /**
  * Waypoints for a rough loop of about `km` from a start, heading off along `bearing` first.
  * `stretch` scales the triangle: `planLoop` tunes it until the street route comes out right.
  */
 export function loopWaypoints(start: LatLon, km: number, bearing: number, stretch = 1): LatLon[] {
-  // Streets add detours, so aim the triangle a little short of the target distance.
   const side = (km * 1000 * LOOP_FIRST_GUESS * stretch) / 3;
   return [start, destination(start, bearing, side), destination(start, bearing + 60, side), start];
 }
@@ -86,58 +88,94 @@ export function loopWaypoints(start: LatLon, km: number, bearing: number, stretc
 export const LOOP_TOLERANCE = 0.1;
 /** Route requests per loop at most: the first guess plus re-plans. */
 export const LOOP_MAX_TRIES = 4;
+/** When resizing can't hit the distance, turn the loop this much (degrees) to find other streets. */
+const LOOP_TURNS = [0, 25, -25];
+/** Resizing barely changed the route (below) or changed it far more than the resize (above). */
+const LOOP_FLAT = 0.2;
+const LOOP_JUMP = 1.8;
 
-export type LoopTry = { stretch: number; distance: number };
-
-/**
- * The next triangle stretch to try for a loop of `target` metres. Street distance grows roughly
- * in proportion to the triangle, so: a secant through the last two tries when they slope the
- * right way, otherwise a proportional rescale of the last one. Steps are capped so one odd
- * route (a river, a dead end) can't throw the loop across town.
- */
-export function nextLoopStretch(tries: LoopTry[], target: number): number {
-  const last = tries[tries.length - 1];
-  let next = (last.stretch * target) / last.distance;
-  const prev = tries[tries.length - 2];
-  if (prev && prev.stretch !== last.stretch) {
-    const slope = (last.distance - prev.distance) / (last.stretch - prev.stretch);
-    if (slope > 0 && Number.isFinite(slope)) next = last.stretch + (target - last.distance) / slope;
-  }
-  const capped = Math.min(last.stretch * 2, Math.max(last.stretch * 0.5, next));
-  return Math.min(3, Math.max(0.15, capped));
-}
+/** A loop's shape: its size relative to the first guess, and its turn off the chosen bearing. */
+export type LoopShape = { stretch: number; turn: number };
+export type LoopTry = LoopShape & { distance: number };
 
 export const loopError = (distance: number, target: number) => Math.abs(distance - target) / target;
+const closest = (tries: LoopTry[], target: number) =>
+  tries.reduce((best, t) => (loopError(t.distance, target) < loopError(best.distance, target) ? t : best));
+const clampStretch = (stretch: number, around: number) => Math.min(3, Math.max(0.15, Math.min(around * 2, Math.max(around * 0.5, stretch))));
 
 /**
- * Tries loop sizes one after another (never in parallel) until a route lands within the
+ * The next loop shape to try for a loop of `target` metres, or null when nothing is left to try.
+ *
+ * Street distance grows roughly in line with the triangle, plus a fixed bit to reach the first
+ * street. So: rescale the closest try in proportion, then once there are two tries, follow the
+ * line through them (between them, when they sit either side of the target). Streets also jump:
+ * a slightly bigger triangle can snap onto a road across a creek, or several sizes can all snap
+ * to the same streets. Then resizing is hopeless, so turn the loop a little to find other streets.
+ */
+export function nextLoopShape(tries: LoopTry[], target: number): LoopShape | null {
+  const turn = tries[tries.length - 1].turn;
+  const same = tries.filter(t => t.turn === turn);
+  const best = closest(same, target);
+  const proportional = (best.stretch * target) / best.distance;
+  let stretch = proportional;
+  let stuck = false;
+  const under = same.filter(t => t.distance < target).sort((a, b) => b.stretch - a.stretch)[0];
+  const over = same.filter(t => t.distance > target).sort((a, b) => a.stretch - b.stretch)[0];
+  const bracketed = !!under && !!over;
+  const [p, q] = bracketed ? [under, over] : [...same].sort((a, b) => loopError(a.distance, target) - loopError(b.distance, target));
+  if (p && q && p.stretch !== q.stretch) {
+    // How many percent the route changed per percent of resize: about 1 on a regular street grid.
+    const elasticity = (q.distance - p.distance) / (q.distance + p.distance) / ((q.stretch - p.stretch) / (q.stretch + p.stretch));
+    if (elasticity < LOOP_FLAT || elasticity > LOOP_JUMP) stuck = true;
+    else {
+      const secant = p.stretch + ((target - p.distance) * (q.stretch - p.stretch)) / (q.distance - p.distance);
+      // Off the end of the line, go no more than twice as far as a plain rescale would.
+      const room = 2 * Math.abs(proportional - best.stretch);
+      stretch = bracketed ? secant : Math.min(best.stretch + room, Math.max(best.stretch - room, secant));
+    }
+  }
+  stretch = clampStretch(stretch, best.stretch);
+  if (!stuck && !same.some(t => Math.abs(t.stretch - stretch) < 0.03 * stretch)) return { stretch, turn };
+
+  const nextTurn = LOOP_TURNS[LOOP_TURNS.indexOf(turn) + 1];
+  if (nextTurn === undefined) return null;
+  const overall = closest(tries, target);
+  return { stretch: clampStretch((overall.stretch * target) / overall.distance, overall.stretch), turn: nextTurn };
+}
+
+/**
+ * Tries loop shapes one after another (never in parallel) until a route lands within the
  * tolerance of `target` metres, and returns the closest one. `attempt` plans the route for a
- * stretch; aborting its signal stops the search.
+ * shape; aborting its signal stops the search.
  */
 export async function fitLoop<R extends { distance: number }>(
   target: number,
-  attempt: (stretch: number) => Promise<R>,
+  attempt: (shape: LoopShape) => Promise<R>,
   maxTries = LOOP_MAX_TRIES,
 ): Promise<{ route: R; tries: LoopTry[] }> {
   const tries: LoopTry[] = [];
   let best: R | null = null;
-  let stretch = 1;
-  for (let i = 0; i < maxTries; i++) {
-    const route = await attempt(stretch);
-    tries.push({ stretch, distance: route.distance });
+  let shape: LoopShape | null = { stretch: 1, turn: 0 };
+  while (shape && tries.length < maxTries) {
+    let route: R;
+    try {
+      route = await attempt(shape);
+    } catch (error) {
+      // A shape with no route ends the search, but a loop found earlier still stands.
+      if (!best || (error as Error).name === 'AbortError') throw error;
+      break;
+    }
+    tries.push({ ...shape, distance: route.distance });
     if (!best || loopError(route.distance, target) < loopError(best.distance, target)) best = route;
     if (loopError(route.distance, target) <= LOOP_TOLERANCE) break;
-    const next = nextLoopStretch(tries, target);
-    // The same triangle again would give the same streets.
-    if (tries.some(t => Math.abs(t.stretch - next) < 0.01 * next)) break;
-    stretch = next;
+    shape = nextLoopShape(tries, target);
   }
   return { route: best!, tries };
 }
 
 /** A loop of about `km` from `start`, sized to the streets, with its elevation profile. */
 export async function planLoop(start: LatLon, km: number, bearing: number, signal?: AbortSignal): Promise<PlannedRoute & { tries: LoopTry[] }> {
-  const { route, tries } = await fitLoop(km * 1000, stretch => walkingRoute(loopWaypoints(start, km, bearing, stretch), signal));
+  const { route, tries } = await fitLoop(km * 1000, ({ stretch, turn }) => walkingRoute(loopWaypoints(start, km, bearing + turn, stretch), signal));
   return { ...(await withElevation(route, signal)), tries };
 }
 
