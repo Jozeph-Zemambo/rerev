@@ -22,6 +22,11 @@ export type SurfaceProbe = {
   depth(height: number, range: number, verdict: DepthVerdict): void;
   /** A ground sample (`diff` = its height minus the known ground, null if none known yet). */
   ground(diff: number | null, accepted: boolean, weight: number): void;
+  /**
+   * How far depth said a point on the floor was, over how far the known floor actually is along
+   * that line of sight (1 = right; above 1 = depth reads too far, so points sink below the floor).
+   */
+  ratio?(ratio: number, range: number): void;
 };
 
 /** Points this far above the local ground count as an obstacle (stops at 2 m to ignore ceilings). */
@@ -54,15 +59,27 @@ const NOISE_FROM = 2;
 const NOISE_PER_METRE = 0.02;
 const MAX_GROUND_WEIGHT = 20;
 /**
- * The phone's own floor detection (AR hit tests) is trusted over a ground height the map got
- * wrong. If it keeps finding the floor lower than the map thinks, LOWER_VOTES times within
- * LOWER_WINDOW seconds, agreeing within LOWER_AGREE, that cell's ground moves down to it.
- * Only downward: a raised surface (a table, a step up) must never become "ground" this way.
+ * The phone's own floor detection (AR hit tests) is what sets ground heights; field tests showed
+ * it stays right when depth readings drift. If it keeps disagreeing with the map, REBASE_VOTES
+ * times within REBASE_WINDOW seconds, agreeing within REBASE_AGREE, that cell's ground moves to
+ * it, up or down, by up to REBASE_MAX. Further than that is a real ledge or a table top, which
+ * must stay a hazard, not become ground.
  */
 const TRUSTED_WEIGHT = 2;
-const LOWER_VOTES = 3;
-const LOWER_WINDOW = 1;
-const LOWER_AGREE = 0.04;
+const REBASE_VOTES = 3;
+const REBASE_WINDOW = 1;
+const REBASE_AGREE = 0.04;
+const REBASE_MAX = 0.3;
+/**
+ * Depth readings can drift (field tests: the near ones sank 15-40 cm below the floor while the
+ * phone's floor detection still agreed). When most near readings in a frame say "drop" while
+ * the floor detection agrees with the map, depth is the one that's wrong: that frame's drop
+ * votes are ignored.
+ */
+const NEAR_RANGE = 2;
+const DISTRUST_BELOW = -0.1;
+const DISTRUST_MIN_POINTS = 20;
+const TRUST_FLOOR_AGREEMENT = 0.6;
 
 type Vote = { count: number; at: number; confirmed: boolean };
 
@@ -75,8 +92,8 @@ type Cell = {
   drop: Vote;
   /** Upper envelope of obstacle points in this cell (absolute height), e.g. a stair tread. */
   top: number;
-  /** Trusted floor readings below this cell's ground, gathering towards moving it down. */
-  lower: { count: number; at: number; y: number };
+  /** Trusted floor readings disagreeing with this cell's ground, gathering towards moving it. */
+  rebase: { count: number; at: number; y: number };
 };
 
 const hazardActive = (vote: Vote, floorSeenAt: number, now: number) =>
@@ -96,8 +113,12 @@ export class SurfaceMap {
   walkableStep = 0;
   /** Field testing only: told about every judgement. */
   probe: SurfaceProbe | null = null;
-  /** How many cells have had their ground moved down to match the phone's floor detection. */
-  lowered = 0;
+  /** How many cells have had their ground moved to match the phone's floor detection. */
+  rebased = 0;
+  /** Depth frames whose drop votes were ignored because depth disagreed with the floor. */
+  distrustedFrames = 0;
+  /** Running share of trusted floor detections that agree with the map (1 = all agree). */
+  private floorAgreement = 1;
 
   /** How far a trusted ground sample may sit from the known ground and still count as ground. */
   groundTolerance(base: number) {
@@ -106,7 +127,9 @@ export class SurfaceMap {
 
   reset() {
     this.cells.clear();
-    this.lowered = 0;
+    this.rebased = 0;
+    this.distrustedFrames = 0;
+    this.floorAgreement = 1;
   }
 
   get size() {
@@ -178,8 +201,9 @@ export class SurfaceMap {
     const reference = this.referenceGround(x, z);
     const rejected = reference !== null && Math.abs(y - reference) > tolerance;
     if (weight >= 1) this.probe?.ground(reference === null ? null : y - reference, !rejected, weight);
+    if (weight >= TRUSTED_WEIGHT && reference !== null) this.floorAgreement += ((rejected ? 0 : 1) - this.floorAgreement) * 0.05;
     if (rejected) {
-      if (weight >= TRUSTED_WEIGHT && y < reference!) this.voteLower(x, y, z, now);
+      if (weight >= TRUSTED_WEIGHT && Math.abs(y - reference!) <= REBASE_MAX) this.voteRebase(x, y, z, now);
       return;
     }
     const cell = this.cell(cellIndex(x), cellIndex(z));
@@ -194,7 +218,35 @@ export class SurfaceMap {
    * local ground: near the ground refines it, well above votes "obstacle", well below votes
    * "drop". Points with no nearby ground to compare against are skipped (no guessing).
    */
-  addDepthPoint(x: number, y: number, z: number, now: number, range = 0) {
+  /**
+   * One frame of depth points (`d` = distance from the phone), nearest first. Like
+   * addDepthPoint for each, except that if most of the near points say "drop" while the phone's
+   * floor detection agrees with the map, the frame's drop votes are ignored (see DISTRUST_BELOW).
+   * `camera` is where the phone was, for the field-test depth check.
+   */
+  addDepthFrame(points: readonly { x: number; y: number; z: number; d: number }[], now: number, camera?: { x: number; y: number; z: number }) {
+    const near: number[] = [];
+    for (const p of points) {
+      if (p.d >= NEAR_RANGE) continue;
+      const reference = this.referenceGround(p.x, p.z);
+      if (reference !== null) near.push(p.y - reference);
+    }
+    near.sort((a, b) => a - b);
+    const sinking = near.length >= DISTRUST_MIN_POINTS && near[near.length >> 1] <= DISTRUST_BELOW;
+    const dropsTrusted = !(sinking && this.floorAgreement >= TRUST_FLOOR_AGREEMENT);
+    if (!dropsTrusted) this.distrustedFrames++;
+    for (const p of points) {
+      if (camera && this.probe?.ratio) {
+        // How far depth measured along this line of sight, against how far the known floor is.
+        const reference = this.referenceGround(p.x, p.z);
+        const drop = p.y - camera.y;
+        if (reference !== null && drop < -0.2) this.probe.ratio(drop / (reference - camera.y), p.d);
+      }
+      this.addDepthPoint(p.x, p.y, p.z, now, p.d, dropsTrusted);
+    }
+  }
+
+  addDepthPoint(x: number, y: number, z: number, now: number, range = 0, dropsTrusted = true) {
     const reference = this.referenceGround(x, z);
     if (reference === null) {
       this.probe?.depth(NaN, range, 'no ground');
@@ -203,12 +255,19 @@ export class SurfaceMap {
     const height = y - reference;
     if (Math.abs(height) <= GROUND_BAND) {
       this.probe?.depth(height, range, 'ground');
-      this.addGroundSample(x, y, z, 0.3, GROUND_BAND, now);
+      // Depth may mark ground as seen, but never moves its height: biased depth would drag the
+      // ground along with it, one cell at a time. Heights come from the phone's floor detection.
+      const cell = this.cell(cellIndex(x), cellIndex(z));
+      if (cell.groundWeight === 0) {
+        cell.ground = reference;
+        cell.groundWeight = 0.3;
+      }
+      cell.floorSeenAt = Math.max(cell.floorSeenAt, now);
       return;
     }
     const margin = NOISE_PER_METRE * Math.max(0, range - NOISE_FROM);
     const isObstacle = height >= Math.max(OBSTACLE_MIN, this.walkableStep) + margin && height <= OBSTACLE_MAX;
-    const isDrop = height <= -(Math.max(DROP_MIN, this.walkableStep) + margin) && height >= -DROP_MAX;
+    const isDrop = dropsTrusted && height <= -(Math.max(DROP_MIN, this.walkableStep) + margin) && height >= -DROP_MAX;
     this.probe?.depth(height, range, isObstacle ? 'obstacle' : isDrop ? 'drop' : Math.abs(height) > 1.5 ? 'out of range' : 'between');
     if (!isObstacle && !isDrop) return;
     const cell = this.cell(cellIndex(x), cellIndex(z));
@@ -286,24 +345,25 @@ export class SurfaceMap {
     return out;
   }
 
-  private voteLower(x: number, y: number, z: number, now: number) {
+  private voteRebase(x: number, y: number, z: number, now: number) {
     const time = Number.isFinite(now) ? now : performance.now() / 1000;
     const cell = this.cell(cellIndex(x), cellIndex(z));
-    const lower = cell.lower;
-    if (time - lower.at > LOWER_WINDOW || Math.abs(y - lower.y) > LOWER_AGREE) {
-      lower.count = 0;
-      lower.y = y;
+    const rebase = cell.rebase;
+    if (time - rebase.at > REBASE_WINDOW || Math.abs(y - rebase.y) > REBASE_AGREE) {
+      rebase.count = 0;
+      rebase.y = y;
     }
-    lower.count++;
-    lower.at = time;
-    lower.y += (y - lower.y) / lower.count;
-    if (lower.count < LOWER_VOTES) return;
-    cell.ground = lower.y;
+    rebase.count++;
+    rebase.at = time;
+    rebase.y += (y - rebase.y) / rebase.count;
+    if (rebase.count < REBASE_VOTES) return;
+    cell.ground = rebase.y;
     cell.groundWeight = 3;
     cell.drop = { count: 0, at: -Infinity, confirmed: false };
+    cell.obstacle = { count: 0, at: -Infinity, confirmed: false };
     cell.floorSeenAt = time;
-    lower.count = 0;
-    this.lowered++;
+    rebase.count = 0;
+    this.rebased++;
   }
 
   private isObstacle(cell: Cell, now: number) {
@@ -325,7 +385,7 @@ export class SurfaceMap {
         obstacle: { count: 0, at: -Infinity, confirmed: false },
         drop: { count: 0, at: -Infinity, confirmed: false },
         top: 0,
-        lower: { count: 0, at: -Infinity, y: 0 },
+        rebase: { count: 0, at: -Infinity, y: 0 },
       };
       this.cells.set(key, cell);
     }

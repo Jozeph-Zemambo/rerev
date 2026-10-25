@@ -9,6 +9,14 @@ const MIN_DEPTH = 0.25;
 const MAX_DEPTH = 5;
 
 type CpuDepth = { getDepthInMeters(x: number, y: number): number };
+
+function safeDepth(depth: CpuDepth, u: number, v: number) {
+  try {
+    return depth.getDepthInMeters(u, v);
+  } catch {
+    return -1;
+  }
+}
 type FrameWithDepth = XRFrame & { getDepthInformation?(view: XRView): CpuDepth | undefined };
 
 /**
@@ -21,6 +29,11 @@ export class DepthSensor {
   private readonly viewToWorld = new THREE.Matrix4();
   private readonly point = new THREE.Vector3();
   private readonly samples: { d: number; x: number; y: number; z: number }[] = [];
+  private readonly camera = new THREE.Vector3();
+  /** Field testing: frames read, and how many came back identical to the one before (stale). */
+  frames = 0;
+  unchanged = 0;
+  private lastProbe = '';
 
   /** Returns how many usable points were read this frame (0 if the phone gave no depth). */
   sample(frame: XRFrame, referenceSpace: XRReferenceSpace, map: SurfaceMap, now: number): number {
@@ -50,9 +63,17 @@ export class DepthSensor {
       }
     }
 
+    // A few fixed pixels: if they read exactly the same as last time while the phone moves, the
+    // depth image isn't updating.
+    const probe = [0.5, 0.65, 0.8].map(v => safeDepth(depth, 0.5, v).toFixed(4)).join(',');
+    this.frames++;
+    if (probe === this.lastProbe) this.unchanged++;
+    this.lastProbe = probe;
+
     // Nearest first, so ground knowledge spreads outward before far points are judged.
     this.samples.sort((a, b) => a.d - b.d);
-    for (const s of this.samples) map.addDepthPoint(s.x, s.y, s.z, now, s.d);
+    this.camera.setFromMatrixPosition(this.viewToWorld);
+    map.addDepthFrame(this.samples, now, this.camera);
     return this.samples.length;
   }
 }

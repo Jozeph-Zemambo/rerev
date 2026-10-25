@@ -66,6 +66,48 @@ test('a ground height set too high corrects itself from the phone\'s floor detec
     for (let d = 0.6; d <= 5; d += 0.2) for (const x of [-0.4, 0, 0.4]) map.addDepthPoint(x, 0, camera - d, now, d);
     if (frame >= 20 && map.hazardAt(0, camera - 2, 0.6, now)) flagged++;
   }
-  assert.ok(map.lowered > 0, 'the map should have moved its ground down');
+  assert.ok(map.rebased > 0, 'the map should have moved its ground down');
   assert.equal(flagged, 0, 'flat pavement should not stay a "drop"');
+});
+
+/** Walk 4 m over flat ground (y = 0) where the phone's floor detection is right but depth isn't. */
+function walkWithBiasedDepth(depthY: (range: number) => number) {
+  const map = new SurfaceMap();
+  map.seedGround(0, 0, 0, 1);
+  let now = 0;
+  let flagged = 0;
+  for (let frame = 0; frame < 40; frame++, now += 0.1) {
+    const camera = -frame * 0.1;
+    for (const ahead of [0.5, 0.9, 1.3]) map.addGroundSample(0, 0, camera - ahead, 2, map.groundTolerance(0.1), now);
+    const points = [];
+    for (let d = 0.6; d <= 5; d += 0.2) for (const x of [-0.4, 0, 0.4]) points.push({ x, y: depthY(d), z: camera - d, d });
+    map.addDepthFrame(points, now);
+    if (frame >= 10 && map.hazardAt(0, camera - 1.5, 0.6, now) === 'drop') flagged++;
+  }
+  return { map, flagged };
+}
+
+test('depth readings that drift with distance never drag the ground down with them', () => {
+  // Field test: the ground crept a metre below the street, one cell at a time.
+  const { map } = walkWithBiasedDepth(range => -0.04 * range);
+  for (const z of [-2, -4, -6]) {
+    const ground = map.referenceGround(0, z);
+    assert.ok(ground !== null && Math.abs(ground) < 0.02, `ground at z=${z} should stay at the floor, got ${ground}`);
+  }
+});
+
+test('near depth sinking below a floor the phone says is flat is not a drop', () => {
+  // Field test: near readings 15-40 cm below the floor while the floor detection agreed.
+  const { map, flagged } = walkWithBiasedDepth(range => (range < 2 ? -0.3 : 0));
+  assert.equal(flagged, 0);
+  assert.ok(map.distrustedFrames > 0);
+});
+
+test('the floor detection can move the ground up a kerb, but a table top never becomes ground', () => {
+  const map = new SurfaceMap();
+  map.seedGround(0, 0, 0, 1);
+  for (let i = 0; i < 6; i++) map.addGroundSample(0, 0.15, -0.6, 2, 0.1, i * 0.1); // a kerb top
+  assert.ok(Math.abs((map.groundAt(0, -0.6) ?? 0) - 0.15) < 0.01, 'kerb top should become ground');
+  for (let i = 0; i < 6; i++) map.addGroundSample(0.6, 0.75, 0, 2, 0.1, i * 0.1); // a table
+  assert.ok(Math.abs(map.groundAt(0.6, 0) ?? 0) < 0.01, 'a table must not become ground');
 });
