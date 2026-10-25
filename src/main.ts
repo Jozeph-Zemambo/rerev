@@ -223,6 +223,8 @@ const sim = {
   walkPoints: [] as RoutePoint[],
   walkLengths: [] as number[],
   walk: null as { s: number } | null,
+  /** Follow-me preview: how far the walker has stepped aside to follow a detour. */
+  side: { x: 0, z: 0 },
 };
 
 /** Walk your course: find the floor → ready to record → recording → running → summary → … */
@@ -897,6 +899,7 @@ function startPreview() {
     }));
     sim.walkLengths = cumulativeLengths(sim.walkPoints);
     sim.walk = { s: 0 };
+    sim.side = { x: 0, z: 0 };
     const start = new THREE.Vector3(walk.points[0].x, 0, walk.points[0].z);
     camera.position.set(start.x, 1.5, start.z);
     // Tapped while facing a little off down the hallway, as in the field.
@@ -1051,7 +1054,14 @@ function advanceSim(dt: number, now: number, sensorTick: boolean): number {
     if (!partner.breaking) walk.s = Math.min(sim.walkLengths.at(-1)!, walk.s + pace * dt);
     const at = pointAlong(sim.walkPoints, sim.walkLengths, walk.s);
     const look = pointAlong(sim.walkPoints, sim.walkLengths, walk.s + 3);
-    const side = path.detourAt(from + 0.3, { x: 0, z: 0 });
+    // People step aside smoothly (well under a metre a second), whatever the path does.
+    const target = path.detourAt(from + 0.3, { x: 0, z: 0 });
+    const side = sim.side;
+    const dx = target.x - side.x;
+    const dz = target.z - side.z;
+    const step = Math.min(1, (0.8 * dt) / (Math.hypot(dx, dz) || 1));
+    side.x += dx * step;
+    side.z += dz * step;
     camera.position.set(at.x + side.x, world.groundHeight(at.x + side.x, at.z + side.z) + 1.5, at.z + side.z);
     if (Math.hypot(look.x - at.x, look.z - at.z) > 0.3) camera.lookAt(look.x + side.x, 0.4, look.z + side.z);
   } else if (!routeRun) {
