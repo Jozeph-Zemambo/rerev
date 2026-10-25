@@ -9,9 +9,11 @@
  *     keeps up, and eases down towards their speed as they drop back, rather than running away
  *     and stopping dead.
  * Either way it only stands and jogs on the spot once the runner has actually stopped.
+ *   - 'free' (race mode, and "let it run ahead" on a course): the buddy ignores the runner and
+ *     holds the goal pace, slowing only for hills. It never waits.
  */
 
-export type PacingMode = 'match' | 'goal';
+export type PacingMode = 'match' | 'goal' | 'free';
 
 /** How fast it may ever go, m/s. */
 export const MAX_SPEED = 4;
@@ -58,6 +60,7 @@ export function paceTarget(p: PaceInput): number {
   const behind = p.lead - p.targetLead;
   const correction = clamp(-LEAD_GAIN * behind, -MAX_CORRECTION, MAX_CORRECTION);
   if (p.mode === 'match') return clamp(p.runnerSpeed * p.effort + correction, 0, MAX_SPEED);
+  if (p.mode === 'free') return clamp(p.goalPace * p.hill, 0, MAX_SPEED);
 
   const goal = p.goalPace * p.effort * p.hill;
   // Caught up: keep ahead, at the runner's speed if they're quicker than the goal.

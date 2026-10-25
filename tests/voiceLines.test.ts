@@ -30,7 +30,7 @@ test('every line id written in the code is in the catalog', () => {
   };
   walk('src');
   walk('convex');
-  const prefixes = /^(coach|turn|split|route|lap|hazard|run|coin|cmd|chat|confirm|idle|booth)_[a-z0-9_]+$/;
+  const prefixes = /^(coach|turn|split|route|lap|hazard|run|coin|cmd|chat|confirm|idle|booth|race)_[a-z0-9_]+$/;
   let checked = 0;
   for (const file of files) {
     if (file.includes('_generated')) continue;

@@ -22,7 +22,8 @@ export type LineCategory =
   | 'chat'
   | 'confirm'
   | 'idle'
-  | 'booth';
+  | 'booth'
+  | 'race';
 
 type LineSpec = {
   id: string;
@@ -95,7 +96,20 @@ const FIXED = [
   { id: 'run_finish', text: 'We made it! Great run.', mood: 'cheer', category: 'run', note: 'Proud, celebratory.' },
   { id: 'course_ready_loop', text: "Loop's ready. Let's go!", mood: 'cheer', category: 'run', note: 'Pleased with the course you drew.' },
   { id: 'course_ready_line', text: "Out and back it is. Let's go!", mood: 'cheer', category: 'run', note: 'Pleased with the course you drew.' },
+  { id: 'run_ahead_on', text: "I'll run on ahead. Catch me if you can!", mood: 'cheer', category: 'run', note: 'Cheeky, playful.' },
+  { id: 'run_ahead_off', text: "Okay, I'll stick with you.", mood: 'cheer', category: 'run' },
+  { id: 'run_come_back', text: 'Coming back to you!', mood: 'cheer', category: 'run', note: 'Bouncy.' },
   { id: 'run_tracking_lost', text: "I can't see the ground. Point your phone at the floor ahead.", mood: 'info', category: 'run', note: 'Helpful, unhurried.' },
+
+  // Race mode: the buddy races you round the course on its own.
+  { id: 'race_ready', text: 'Race time! On your marks.', mood: 'cheer', category: 'race', note: 'Announcer energy, building.' },
+  { id: 'race_countdown_3', text: 'Three!', mood: 'cheer', category: 'race', note: 'Short and punchy, one word.' },
+  { id: 'race_countdown_2', text: 'Two!', mood: 'cheer', category: 'race', note: 'Short and punchy, one word.' },
+  { id: 'race_countdown_1', text: 'One!', mood: 'cheer', category: 'race', note: 'Short and punchy, one word.' },
+  { id: 'race_go', text: 'Go!', mood: 'cheer', category: 'race', note: 'Loud and excited.' },
+  { id: 'race_last_lap', text: 'Last lap! Give it everything!', mood: 'cheer', category: 'race', note: 'Big energy.' },
+  { id: 'race_finish', text: 'What a race! Did you beat me?', mood: 'cheer', category: 'race', note: 'Out of breath, delighted, teasing.' },
+  { id: 'race_stopped', text: 'Race over. Rematch?', mood: 'cheer', category: 'race', note: 'Playful.' },
 
   // Coin pickups. Short and squeaky; only said when the buddy isn't already talking.
   { id: 'coin_1', text: 'Cha-ching!', mood: 'cheer', category: 'coin', note: 'Quick, squeaky, delighted.' },

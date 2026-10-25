@@ -15,7 +15,8 @@ import { BUDDY_NAMES, BUDDY_PITCH, type BuddyColor } from './partner/buddies';
 import { BUDDY_HEIGHT, Mascot } from './partner/mascot';
 import { Partner, type PartnerState } from './partner/partner';
 import { RouteCallouts } from './run/callouts';
-import { RunRecorder } from './run/recorder';
+import { DEFAULT_RACE_PACE, defaultRaceLaps, formatRaceTime, RACE_PACES, RaceClock, raceLap, raceSpan, type RaceBeat, type RacePace } from './run/race';
+import { RunRecorder, type RunSummary, type TracePoint } from './run/recorder';
 import { RouteRun } from './run/routeRun';
 import { PreviewWorld } from './sim/previewWorld';
 import { Planner, type RunGoal } from './ui/planner';
@@ -231,7 +232,7 @@ const sim = {
 };
 
 /** Walk your course: find the floor → ready to record → recording → running → summary → … */
-type CoursePhase = 'find' | 'ready' | 'recording' | 'running' | 'summary';
+type CoursePhase = 'find' | 'ready' | 'recording' | 'running' | 'summary' | 'race-setup' | 'race';
 const course = {
   phase: 'find' as CoursePhase,
   recording: new CourseRecording(),
@@ -246,6 +247,32 @@ const idle = { at: new THREE.Vector3(), shown: false };
 /** Height of the floor the reticle last found. */
 let lastFloorY = 0;
 const TURN_QUIPS = ['And back!', 'Round we go!', 'Turning!', 'U-turn!'];
+
+/**
+ * Race mode on a walked course: the phone is propped up at the start (AR still running, so the
+ * course stays put), the buddy runs the course on its own at a set pace, and you race it for real
+ * while the phone films. The phone's own position means nothing here, so nothing is recorded.
+ */
+const race = {
+  on: false,
+  clock: new RaceClock(),
+  pace: DEFAULT_RACE_PACE as RacePace['id'],
+  laps: 2,
+  /** Laps picked by hand (otherwise they follow the course: 2 there-and-backs, 3 loops). */
+  lapsPicked: false,
+  /** Where along the path the buddy lines up, and where it finishes. */
+  start: 0,
+  finish: 0,
+  lapLength: 0,
+  lap: 1,
+};
+/** The last normal course run's summary, to go back to from race setup. */
+let lastCourseSummary: { summary: RunSummary; trace: readonly TracePoint[] } | null = null;
+/** "Let it run ahead" on course runs: the buddy holds the race pace and doesn't wait for you. */
+let runAhead = false;
+/** The runner's distance along the path in the last frame (for "Come back"). */
+let lastRunnerS = 0;
+const RUN_AHEAD_GAP = 2;
 let turnQuip = 0;
 
 // ---------------------------------------------------------------- screens
@@ -460,7 +487,8 @@ async function startRun(next: RunMode) {
 async function finishRun() {
   // On a course, AR stays open between runs: the course only exists while it is.
   if (mode?.kind === 'course') {
-    if (placed) finishCourseRun();
+    if (race.on) stopRace();
+    else if (placed) finishCourseRun();
     return;
   }
   await leaveRun();
@@ -485,10 +513,14 @@ function clearRunScene() {
   hud.showTurn(null);
   hud.showControls(false);
   hud.hrPanel.hidden = true;
+  race.on = false;
+  partner.finishAt = Infinity;
+  showRaceUi(null);
 }
 
 function endRun() {
-  const summary = placed ? recorder.finish(performance.now() / 1000) : null;
+  // A race records nothing, so leaving AR mid-race has no run to sum up.
+  const summary = placed && !race.on ? recorder.finish(performance.now() / 1000) : null;
   placed = false;
   mode = null;
   routeRun = null;
@@ -544,12 +576,14 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   runStartedAt = performance.now() / 1000;
   coach.reset(runStartedAt);
   callouts.reset(runStartedAt, routeRun?.route.steps, routeRun?.route.distance, lapLength);
-  recorder.start(runStartedAt, {
-    kind: mode?.kind === 'route' ? 'route' : 'quick',
-    goalPaceSecPerKm: 1000 / partner.goalPace,
-    zone: coach.zone,
-    routeDistance: routeRun?.route.distance,
-  });
+  // A race has nothing of yours to record: the phone sits still at the start.
+  if (!race.on)
+    recorder.start(runStartedAt, {
+      kind: mode?.kind === 'route' ? 'route' : 'quick',
+      goalPaceSecPerKm: 1000 / partner.goalPace,
+      zone: coach.zone,
+      routeDistance: routeRun?.route.distance,
+    });
   lastState = null;
   wasDetouring = false;
   lastDetourCall = -Infinity;
@@ -566,6 +600,10 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   placed = true;
   hud.showControls(true);
   hud.breakButton.textContent = 'Take a break';
+  // Race and "run ahead" are for walked courses.
+  const onCourse = mode?.kind === 'course' && !race.on;
+  hud.raceButton.hidden = hud.runAheadButton.hidden = !onCourse;
+  hud.comeBackButton.hidden = !onCourse || !runAhead;
 }
 
 /** Tapped the floor in AR: lay the quick path, or anchor the map route to the world here. */
@@ -682,6 +720,7 @@ scene.add(controller);
 function setCoursePhase(phase: CoursePhase) {
   course.phase = phase;
   hud.showCoursePanel(phase === 'ready' || phase === 'recording' ? phase : null);
+  raceSetup.hidden = phase !== 'race-setup';
 }
 
 function resetCourse() {
@@ -713,12 +752,17 @@ byId('sum-again').onclick = () => {
   summaryScreen.hide();
   startCourseRun();
 };
-byId('sum-new').onclick = () => {
+byId('sum-race').onclick = () => openRaceSetup();
+byId('sum-new').onclick = () => newCourse();
+
+function newCourse() {
   summaryScreen.hide();
+  stopOnCourse();
   course.built = null;
+  lastCourseSummary = null;
   if (sim.world) previewCourseReady();
   setCoursePhase(sim.world ? 'ready' : 'find');
-};
+}
 byId('sum-exit').onclick = () => {
   summaryScreen.hide();
   void leaveRun();
@@ -762,6 +806,12 @@ function finishRecording() {
   }
   course.built = built;
   sim.walk = null;
+  // Preview: ?race goes straight to race setup instead of a run.
+  if (sim.world && new URLSearchParams(location.search).has('race')) {
+    lastCourseSummary = null;
+    openRaceSetup();
+    return;
+  }
   startCourseRun();
 }
 
@@ -778,6 +828,7 @@ function startCourseRun() {
   layRoute(run.points, course.floorY, [], 0, run.laps);
   const runnerS = path.project(from);
   partner.reset(runnerS);
+  applyRunAhead();
   sim.runnerS = runnerS;
   idle.shown = false;
   const metres = Math.round(built.length);
@@ -791,6 +842,7 @@ function startCourseRun() {
 /** Finish on a course: the summary goes over the camera view and AR stays open for another go. */
 function finishCourseRun() {
   const summary = recorder.finish(performance.now() / 1000);
+  lastCourseSummary = { summary, trace: recorder.trace };
   placed = false;
   partner.turnarounds = [];
   path.pointAt(partner.s, idle.at);
@@ -800,6 +852,256 @@ function finishCourseRun() {
   summaryScreen.show(summary, recorder.trace, coach.zone, hud.root);
 }
 
+/**
+ * Stop whatever is going on along the course (a run or a race), with no summary screen: the
+ * buddy stays where it got to. A run cut short is still saved.
+ */
+function stopOnCourse() {
+  if (!placed) return;
+  if (!race.on) {
+    const summary = recorder.finish(performance.now() / 1000);
+    lastCourseSummary = { summary, trace: recorder.trace };
+  }
+  placed = false;
+  partner.turnarounds = [];
+  path.pointAt(partner.s, idle.at);
+  idle.shown = true;
+  clearRunScene();
+}
+
+// ---------------------------------------------------------------- race mode
+
+const raceSetup = byId('race-setup');
+const racePanel = byId('race-panel');
+const raceStopButton = byId<HTMLButtonElement>('race-stop');
+const raceResult = byId('race-result');
+const racePaceChips = [...byId('race-pace').querySelectorAll<HTMLButtonElement>('button')];
+const raceLapChips = [...byId('race-laps').querySelectorAll<HTMLButtonElement>('button')];
+
+const racePace = () => RACE_PACES.find(p => p.id === race.pace)!;
+/** Rev or Vita: whoever you're racing. */
+const buddyName = () => BUDDY_NAMES[buddyColor];
+/** Seconds between crossing the finish and the result card coming up. */
+const RESULT_DELAY = 2.5;
+let resultTimer = 0;
+
+function syncRaceChips() {
+  for (const chip of racePaceChips) chip.setAttribute('aria-pressed', String(chip.dataset.pace === race.pace));
+  for (const chip of raceLapChips) chip.setAttribute('aria-pressed', String(Number(chip.dataset.laps) === race.laps));
+}
+for (const chip of racePaceChips) {
+  chip.onclick = () => {
+    race.pace = chip.dataset.pace as RacePace['id'];
+    syncRaceChips();
+  };
+}
+for (const chip of raceLapChips) {
+  chip.onclick = () => {
+    race.laps = Number(chip.dataset.laps);
+    race.lapsPicked = true;
+    syncRaceChips();
+  };
+}
+
+/** Pick a pace and laps for a race: from the course summary, a course run, or after a race. */
+function openRaceSetup() {
+  const built = course.built;
+  if (!built) return;
+  summaryScreen.hide();
+  stopOnCourse();
+  if (!race.lapsPicked) race.laps = defaultRaceLaps(built.kind);
+  syncRaceChips();
+  byId('race-setup-title').textContent = `Race ${buddyName()}`;
+  byId('race-setup-hint').textContent = `Prop the phone up at the start, facing along the course. ${buddyName()} runs it on its own: race for real!`;
+  setCoursePhase('race-setup');
+  messageHoldUntil = 0;
+}
+
+byId('race-cancel').onclick = () => {
+  setCoursePhase('summary');
+  if (lastCourseSummary) summaryScreen.show(lastCourseSummary.summary, lastCourseSummary.trace, coach.zone, hud.root);
+  else startCourseRun();
+};
+byId('race-start').onclick = () => startRace();
+raceStopButton.onclick = () => stopRace();
+byId('race-again').onclick = () => startRace();
+byId('race-change').onclick = () => openRaceSetup();
+byId('race-run').onclick = () => {
+  stopOnCourse();
+  startCourseRun();
+};
+byId('race-new').onclick = () => newCourse();
+byId('race-exit').onclick = () => void leaveRun();
+hud.raceButton.onclick = () => openRaceSetup();
+
+/**
+ * Line the buddy up a couple of metres along the course from the phone, facing along it, and
+ * count down. It then runs `race.laps` laps at the race pace, whatever the phone does.
+ */
+function startRace() {
+  const built = course.built;
+  if (!built) return;
+  stopOnCourse();
+  summaryScreen.hide();
+  // Preview: the simulated phone goes on a tripod at the start of the course.
+  if (sim.world) previewRaceSpot();
+  const from = viewerPosition(new THREE.Vector3());
+  // One lap more than the race, so the finish (laps on from a start ahead of the phone) is on the path.
+  const run = courseRun(built, { x: from.x, z: from.z }, race.laps + 1);
+  trail.clear();
+  race.on = true;
+  setCoursePhase('race');
+  for (const p of resample(built.points, 0.5)) map.seedGround(p.x, course.floorY, p.z, 0.4);
+  partner.turnarounds = run.turnarounds;
+  layRoute(run.points, course.floorY, [], 0, run.laps);
+  const phoneS = path.project(from);
+  race.lapLength = path.length / run.laps;
+  const span = raceSpan(phoneS, race.lapLength, race.laps, run.turnarounds[0]);
+  race.start = span.start;
+  race.finish = span.finish;
+  race.lap = 1;
+  // Preview: aim the tripod at the start line, as you would the phone.
+  if (sim.world) {
+    const aim = path.pointAt(span.start + 1, new THREE.Vector3());
+    camera.lookAt(aim.x, 0.45, aim.z);
+  }
+  partner.pacing = 'free';
+  partner.goalPace = racePace().speed;
+  partner.effort = 1;
+  partner.finishAt = span.finish;
+  partner.reset(phoneS, span.start);
+  sim.runnerS = phoneS;
+  lastRunnerS = phoneS;
+  // No coins or stars: nobody's running through them. The whole lap is drawn, as a track.
+  collectibles.clear();
+  path.drawAhead = run.turnarounds.length ? race.lapLength + (span.start - phoneS) : race.lapLength - 0.3;
+  const now = performance.now() / 1000;
+  callouts.reset(now, undefined, undefined, race.lapLength);
+  race.clock.start(now);
+  idle.shown = false;
+  // On the line, already facing along the course.
+  path.tangentAt(span.start, tangent);
+  mascot.root.rotation.y = Math.atan2(tangent.x, tangent.z);
+  showRaceUi('countdown');
+}
+
+/** Stop button (or "finish" by voice): the race ends where the buddy is. */
+function stopRace() {
+  if (!race.on || race.clock.phase === 'finished') return;
+  endRace(performance.now() / 1000, false);
+}
+
+function endRace(now: number, crossed: boolean) {
+  race.clock.finish(now);
+  hud.showCount(null);
+  const time = formatRaceTime(race.clock.elapsed(now));
+  const metres = Math.round(race.lapLength * race.laps);
+  byId('race-result-time').textContent = crossed ? time : '–';
+  byId('race-result-sub').textContent = crossed
+    ? `${buddyName()} ran ${race.laps} ${race.laps === 1 ? 'lap' : 'laps'} (${formatDistance(metres)}) at ${racePace().label.toLowerCase()} pace. Did you beat it?`
+    : `Stopped on lap ${race.lap} of ${race.laps}.`;
+  if (crossed) {
+    sounds.fanfare();
+    speak({ id: 'race_finish', bubble: `${time}! Did you beat me?` }, { interrupt: true });
+  } else {
+    speak({ id: 'race_stopped' }, { interrupt: true });
+  }
+  showRaceUi('finished');
+  if (!crossed) return;
+  // Let the camera catch the buddy celebrating at the line before the result card comes up.
+  raceResult.hidden = true;
+  resultTimer = window.setTimeout(() => (raceResult.hidden = false), RESULT_DELAY * 1000);
+}
+
+function onRaceBeat(beat: RaceBeat) {
+  switch (beat) {
+    case 'ready':
+      return speak({ id: 'race_ready' }, { interrupt: true });
+    case 3:
+    case 2:
+    case 1:
+      sounds.countdown(false);
+      return speak({ id: `race_countdown_${beat}` }, { interrupt: true });
+    case 'go':
+      sounds.countdown(true);
+      return speak({ id: 'race_go' }, { interrupt: true });
+  }
+}
+
+/** Every frame of a race, before the buddy moves: the countdown, then lap calls. */
+function updateRace(now: number): Spoken | null {
+  const beat = race.clock.update(now);
+  if (beat !== null) onRaceBeat(beat);
+  hud.showCount(race.clock.display(now));
+  if (race.clock.phase !== 'racing') return null;
+  const travelled = Math.max(0, partner.s - race.start);
+  race.lap = raceLap(travelled, race.lapLength, race.laps);
+  const call = callouts.update(now, partner.s, travelled, false);
+  if (!call) return null;
+  const done = Math.round(travelled / race.lapLength);
+  // The finish says the last one.
+  if (done >= race.laps) return null;
+  if (done === race.laps - 1) return { id: 'race_last_lap', bubble: `Lap ${done} done. Last lap!` };
+  return call;
+}
+
+function raceMessage(): string {
+  switch (race.clock.phase) {
+    case 'countdown':
+      return `Get set! ${buddyName()} runs the course on its own. Race it!`;
+    case 'racing':
+      return `Race on! Lap ${race.lap} of ${race.laps}.`;
+    default:
+      return 'Race over! Rematch?';
+  }
+}
+
+/** The race's own controls: Stop while it's on, the result and Race again after. */
+function showRaceUi(stage: 'countdown' | 'finished' | null) {
+  window.clearTimeout(resultTimer);
+  const on = stage !== null;
+  document.body.classList.toggle('racing', on);
+  racePanel.hidden = !on;
+  raceStopButton.hidden = stage === 'finished';
+  raceResult.hidden = stage !== 'finished';
+  hud.raceStats(on);
+  if (on) hud.showRunButtons(false);
+}
+
+/** Preview: the phone goes on a tripod at the start of the walk. */
+function previewRaceSpot() {
+  const start = sim.walkPoints[0];
+  const ahead = pointAlong(sim.walkPoints, sim.walkLengths, 4);
+  const along = new THREE.Vector3(ahead.x - start.x, 0, ahead.z - start.z).normalize();
+  // A step back from the start line, at tripod height. (Aimed at the start line once it's laid.)
+  camera.position.set(start.x - along.x * 0.6, 1.1, start.z - along.z * 0.6);
+}
+
+// ---------------------------------------------------------------- let it run ahead
+
+/** On a course run, "Run ahead" lets the buddy go at the race pace without waiting for you. */
+function applyRunAhead() {
+  hud.runAheadButton.setAttribute('aria-pressed', String(runAhead));
+  const onCourseRun = placed && mode?.kind === 'course' && !race.on;
+  hud.comeBackButton.hidden = !onCourseRun || !runAhead;
+  if (!onCourseRun) return;
+  partner.pacing = runAhead ? 'free' : 'match';
+  partner.goalPace = runAhead ? racePace().speed : QUICK_PACE;
+}
+hud.runAheadButton.onclick = () => {
+  runAhead = !runAhead;
+  applyRunAhead();
+  speak({ id: runAhead ? 'run_ahead_on' : 'run_ahead_off' });
+};
+hud.comeBackButton.onclick = () => {
+  if (!placed || race.on) return;
+  partner.comeBackTo(lastRunnerS + RUN_AHEAD_GAP);
+  popAge = 0;
+  path.tangentAt(partner.s, tangent);
+  mascot.root.rotation.y = Math.atan2(tangent.x, tangent.z);
+  speak({ id: 'run_come_back' }, { interrupt: true });
+};
+
 function courseMessage(): string {
   switch (course.phase) {
     case 'find':
@@ -808,6 +1110,8 @@ function courseMessage(): string {
       return 'Tap Record, then walk your course. End near the start for a loop, or anywhere else to run it out and back.';
     case 'recording':
       return `● Recording: ${course.recording.length.toFixed(1)} m. Tap Done when you've walked it.`;
+    case 'race-setup':
+      return 'Race mode: pick a pace and how many laps.';
     default:
       return 'Nice run!';
   }
@@ -1122,6 +1426,8 @@ function pointAlong(points: RoutePoint[], lengths: number[], s: number): RoutePo
 /** Moves the simulated runner and returns its distance along the displayed path. */
 function advanceSim(dt: number, now: number, sensorTick: boolean): number {
   const world = sim.world!;
+  // Racing, the phone stands on its tripod at the start (the course is trusted: nothing to sense).
+  if (race.on) return sim.runnerS;
   // The simulated runner also holds back while the buddy turns round at the end of an out-and-back.
   const stopped = partner.state === 'break' || partner.state === 'blocked' || partner.state === 'done' || partner.state === 'turn';
   const pace = (routeRun ? partner.goalPace : QUICK_PACE) * 0.85;
@@ -1237,7 +1543,8 @@ function announce(now: number, trackingLost: boolean) {
       if (following) blockedCallAt = now + FOLLOW_BLOCKED_WAIT;
       else speak({ id: path.status.blockReason === 'drop' ? 'hazard_drop' : 'hazard_blocked' }, { interrupt: true });
     } else if (partner.state === 'done') {
-      speak({ id: 'run_finish', bubble: `We made it! ${formatDistance(recorder.distanceSoFar)}. Great run.` }, { interrupt: true });
+      // A race says its own finish (endRace).
+      if (!race.on) speak({ id: 'run_finish', bubble: `We made it! ${formatDistance(recorder.distanceSoFar)}. Great run.` }, { interrupt: true });
     } else if (partner.state === 'stairs' && lastState !== 'wait') {
       speak({ id: 'hazard_stairs' }, { interrupt: true });
     } else if (partner.state === 'turn') {
@@ -1357,8 +1664,10 @@ renderer.setAnimationLoop((time, frame) => {
       if (sensorTick && frame && referenceSpace && depthEnabled) depthPoints = depthSensor.sample(frame, referenceSpace, map, now);
     }
 
-    // On an out-and-back, show the way back only once you're nearly at the turn.
-    if (partner.turnarounds.length) {
+    lastRunnerS = runnerS;
+    // On an out-and-back, show the way back only once you're nearly at the turn. (A race shows
+    // the whole lap, as a track.)
+    if (partner.turnarounds.length && !race.on) {
       const nextTurn = partner.turnarounds.find(t => t > runnerS - 0.5) ?? path.length;
       path.drawAhead = Math.min(DRAW_AHEAD, nextTurn - runnerS + PAST_TURN);
       collectibles.showAhead = Math.min(30, path.drawAhead);
@@ -1371,14 +1680,25 @@ renderer.setAnimationLoop((time, frame) => {
 
     // Heart rate → coach → buddy behaviour and what it says.
     if (sim.world) heart.simulate(dt, partner.currentSpeed, partner.breaking, now - runStartedAt);
-    const line = coach.update(now, heart.bpm, partner);
-    if (line) speak(line, { interrupt: lineById(line.id).mood === 'care' });
-    const callout = callouts.update(now, runnerS, recorder.distanceSoFar, partner.breaking);
-    if (callout) speak(callout);
-    partner.effort = coach.effort;
-    partner.update(dt, runnerS);
-    // Following, the path's own distances bend and stretch with each re-lay: count what the runner covered.
-    recorder.update(now, following ? follow.travel.odometer : runnerS, heart.bpm, partner.breaking);
+    if (race.on) {
+      // Racing: no coach (no breathers mid-race), laps go by the buddy's own distance, and it
+      // only moves once the countdown says go. Nothing is recorded.
+      const callout = updateRace(now);
+      if (callout) speak(callout);
+      if (race.clock.phase === 'racing') {
+        partner.update(dt, runnerS);
+        if (partner.state === 'done') endRace(now, true);
+      }
+    } else {
+      const line = coach.update(now, heart.bpm, partner);
+      if (line) speak(line, { interrupt: lineById(line.id).mood === 'care' });
+      const callout = callouts.update(now, runnerS, recorder.distanceSoFar, partner.breaking);
+      if (callout) speak(callout);
+      partner.effort = coach.effort;
+      partner.update(dt, runnerS);
+      // Following, the path's own distances bend and stretch with each re-lay: count what the runner covered.
+      recorder.update(now, following ? follow.travel.odometer : runnerS, heart.bpm, partner.breaking);
+    }
     announce(now, trackingLost);
 
     // Stars and coins: in AR the runner is the phone; in preview, the simulated runner on the path.
@@ -1401,9 +1721,17 @@ renderer.setAnimationLoop((time, frame) => {
     const turning = partner.state === 'turn';
     path.tangentAt(turning ? partner.s + 0.35 : partner.s, tangent);
     mascot.root.position.copy(point);
-    // Faces down the path while running or looking ahead; turns to face you otherwise.
-    const ahead = turning || partner.state === 'run' || partner.state === 'look' || partner.state === 'stairs';
-    const facing = ahead ? Math.atan2(tangent.x, tangent.z) : Math.atan2(-tangent.x, -tangent.z);
+    // Faces down the path while running or looking ahead; turns to face you otherwise. In a race
+    // it faces along the course on the start line, and the camera once it's over.
+    const lineUp = race.on && race.clock.phase === 'countdown';
+    const raceOver = race.on && race.clock.phase === 'finished';
+    const ahead = lineUp || (!raceOver && (turning || partner.state === 'run' || partner.state === 'look' || partner.state === 'stairs'));
+    viewerPosition(viewerAt);
+    const facing = ahead
+      ? Math.atan2(tangent.x, tangent.z)
+      : raceOver
+        ? Math.atan2(viewerAt.x - point.x, viewerAt.z - point.z)
+        : Math.atan2(-tangent.x, -tangent.z);
     const turn = Math.atan2(Math.sin(facing - mascot.root.rotation.y), Math.cos(facing - mascot.root.rotation.y));
     mascot.root.rotation.y += turn * Math.min(1, dt * 5);
     if (popAge < POP_TIME) {
@@ -1412,7 +1740,10 @@ renderer.setAnimationLoop((time, frame) => {
       const t = Math.min(1, popAge / POP_TIME);
       mascot.root.scale.setScalar(1 + 2.2 * (t - 1) ** 3 + 1.2 * (t - 1) ** 2);
     }
-    mascot.update(dt, seconds, partner.gait);
+    // On the start line it stands ready; stopped mid-race it idles and waves; past the finish
+    // line it celebrates (the partner's 'done' is the Wave).
+    const standing = lineUp || (raceOver && partner.state !== 'done');
+    mascot.update(dt, seconds, standing ? { speed: 0, inPlace: false, grade: 0, idle: true, ready: lineUp } : partner.gait);
     shadow.position.set(point.x, point.y + 0.003, point.z);
 
     if (sensorTick && !path.trustRoute) markers.update(map, runner, now);
@@ -1427,9 +1758,10 @@ renderer.setAnimationLoop((time, frame) => {
       zone: coach.zone,
       paceMetersPerSecond: recorder.pace,
       leadMeters: Math.max(0, partner.s - runnerS),
+      race: race.on ? { time: formatRaceTime(race.clock.elapsed(now)), lap: race.lap, laps: race.laps } : undefined,
     });
     if (trackingLost) hud.say('Lost track of the ground. Hold the phone steady and point it at the floor ahead.');
-    else if (now >= messageHoldUntil) hud.say(stateMessage(partner.state));
+    else if (now >= messageHoldUntil) hud.say(race.on ? raceMessage() : stateMessage(partner.state));
     const breakLabel = partner.breaking ? "Let's go" : 'Take a break';
     if (hud.breakButton.textContent !== breakLabel) hud.breakButton.textContent = breakLabel;
     bubble.update(point, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera, now);
@@ -1447,7 +1779,7 @@ addEventListener('resize', () => {
 });
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { rerev: { path, partner, mascot, map, camera, sim, follow, coach, heart, commands, recorder, voice, hear, booth, getRouteRun: () => routeRun } });
+  Object.assign(window, { rerev: { path, partner, mascot, map, camera, sim, follow, coach, heart, commands, recorder, voice, hear, booth, race, course, getRouteRun: () => routeRun } });
 }
 
 void (async () => {

@@ -6,6 +6,8 @@ export type HudStats = {
   zone: { low: number; high: number };
   paceMetersPerSecond: number;
   leadMeters: number;
+  /** Race mode: the race clock and lap stand in for pace and lead. */
+  race?: { time: string; lap: number; laps: number };
 };
 
 const SOURCE_LABEL = { watch: 'bpm · watch', manual: 'bpm · demo', simulated: 'bpm · sim', none: 'no watch' } as const;
@@ -46,16 +48,27 @@ export class Hud {
   readonly recordButton = byId<HTMLButtonElement>('btn-record');
   readonly courseDoneButton = byId<HTMLButtonElement>('btn-course-done');
   readonly courseRedoButton = byId<HTMLButtonElement>('btn-course-redo');
+  readonly raceButton = byId<HTMLButtonElement>('btn-race');
+  readonly runAheadButton = byId<HTMLButtonElement>('btn-run-ahead');
+  readonly comeBackButton = byId<HTMLButtonElement>('btn-come-back');
+  private readonly paceKey = byId('pace-k');
+  private readonly paceUnit = byId('pace-u');
+  private readonly leadUnit = byId('lead-u');
+  private readonly raceCount = byId('race-count');
+  private readonly raceCountText = byId('race-count-text');
 
   show(visible: boolean) {
     this.root.hidden = !visible;
   }
 
   private readonly leadName = byId('lead-name');
+  private buddyName = 'Buddy';
+  private racing = false;
 
   /** The lead stat is labelled with the buddy you're running with ("Rev · 3.2 m ahead"). */
   setBuddyName(name: string) {
-    this.leadName.textContent = name;
+    this.buddyName = name;
+    if (!this.racing) this.leadName.textContent = name;
   }
 
   private readonly score = byId('score');
@@ -84,6 +97,11 @@ export class Hud {
     this.score.hidden = !visible;
   }
 
+  /** Just the row of run buttons (Talk, Take a break, …): race mode has its own Stop instead. */
+  showRunButtons(visible: boolean) {
+    this.controls.hidden = !visible;
+  }
+
   /** Walk your course: Record before recording; Start over and Done while recording; else nothing. */
   showCoursePanel(stage: 'ready' | 'recording' | null) {
     this.coursePanel.hidden = stage === null;
@@ -107,6 +125,31 @@ export class Hud {
     this.message.hidden = !visible;
   }
 
+  /**
+   * Race mode's readout: with the phone propped up, its own pace and the buddy's lead mean
+   * nothing, so those two stats become the race clock and the lap.
+   */
+  raceStats(on: boolean) {
+    this.racing = on;
+    setText(this.paceKey, on ? 'Race' : 'Pace');
+    setText(this.paceUnit, on ? 'time' : 'min/km');
+    setText(this.leadName, on ? 'Lap' : this.buddyName);
+    setText(this.leadUnit, on ? 'laps' : 'm ahead');
+    if (!on) this.showCount(null);
+  }
+
+  /** The big countdown number ("3", "2", "1", "GO!"), or null to hide it. Pops in on each change. */
+  showCount(text: string | null) {
+    this.raceCount.hidden = text === null;
+    if (text === null) this.raceCountText.textContent = '';
+    if (text === null || this.raceCountText.textContent === text) return;
+    this.raceCountText.textContent = text;
+    this.raceCount.dataset.beat = text === 'GO!' ? 'go' : 'count';
+    this.raceCountText.classList.remove('pop');
+    void this.raceCountText.offsetWidth;
+    this.raceCountText.classList.add('pop');
+  }
+
   /** Next turn on a map route, or null to hide the chip. */
   showTurn(turn: { modifier: string; street: string; metres: number } | null) {
     this.turn.hidden = !turn;
@@ -125,8 +168,8 @@ export class Hud {
     const band = !bpm ? '' : bpm > stats.zone.high ? 'above' : bpm < stats.zone.low ? 'below' : 'in';
     if (this.hr.dataset.band !== band) this.hr.dataset.band = band;
     setText(this.hrSource, SOURCE_LABEL[stats.heartSource]);
-    setText(this.pace, formatPace(stats.paceMetersPerSecond));
-    setText(this.lead, stats.leadMeters.toFixed(1));
+    setText(this.pace, stats.race ? stats.race.time : formatPace(stats.paceMetersPerSecond));
+    setText(this.lead, stats.race ? `${stats.race.lap}/${stats.race.laps}` : stats.leadMeters.toFixed(1));
   }
 }
 

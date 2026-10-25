@@ -65,6 +65,8 @@ const TURN_PAUSE = 0.4;
 const TURN_WAIT = 1.5;
 /** A runner pausing within this far of a turnaround is turning round, not stopping: no waiting. */
 const TURN_GRACE = 3;
+/** Crossing a race finish line it has slowed to this (m/s). */
+const FINISH_SPEED = 0.9;
 
 /**
  * Paces itself against the runner (see pacing.ts): stays a couple of metres ahead at their own
@@ -80,8 +82,13 @@ export class Partner {
   effort = 1;
   targetLead = 2;
   maxLead = 4.5;
-  /** 'goal' paces a planned route at goalPace; 'match' (Quick start, courses) goes the runner's speed. */
+  /**
+   * 'goal' paces a planned route at goalPace; 'match' (Quick start, courses) goes the runner's
+   * speed; 'free' (race mode, "let it run ahead") runs at goalPace and never waits for anyone.
+   */
   pacing: PacingMode = 'match';
+  /** Stops here (state 'done') if it comes before the end of the path: the finish line of a race. */
+  finishAt = Infinity;
   /** The runner's speed along the path, smoothed. */
   readonly runner = new RunnerSpeed();
   /**
@@ -127,8 +134,9 @@ export class Partner {
     return this.speed;
   }
 
-  reset(runnerS = 0) {
-    this.s = runnerS + START_LEAD;
+  /** Line up for a run with the runner at `runnerS`: a little ahead of them, or at `at`. */
+  reset(runnerS = 0, at = runnerS + START_LEAD) {
+    this.s = at;
     this.state = 'run';
     this.speed = 0;
     this.blindFor = 0;
@@ -141,6 +149,22 @@ export class Partner {
     this.onBreak = false;
     this.turnPause = 0;
     this.turnStarted = false;
+    this.findNextTurn();
+  }
+
+  /**
+   * "Come back": jump to `s` (normally just ahead of the runner) and carry on from there, at
+   * whatever turnaround comes next from it.
+   */
+  comeBackTo(s: number) {
+    this.s = Math.max(0, Math.min(s, this.path.length - 0.3));
+    this.turnPause = 0;
+    this.turnStarted = false;
+    this.findNextTurn();
+    if (this.state === 'done') this.state = 'run';
+  }
+
+  private findNextTurn() {
     this.nextTurn = this.turnarounds.findIndex(t => t > this.s);
     if (this.nextTurn < 0) this.nextTurn = this.turnarounds.length;
   }
@@ -172,7 +196,8 @@ export class Partner {
   }
 
   update(dt: number, runnerS: number) {
-    const end = this.path.length - 0.3;
+    const end = Math.min(this.path.length - 0.3, this.finishAt);
+    const free = this.pacing === 'free';
     const runner = this.runner;
     runner.update(dt, runnerS);
     const turnAt = this.turnaroundAhead;
@@ -208,7 +233,7 @@ export class Partner {
     // Waiting for a runner who's stopped carries on until they move again; for one far behind,
     // until they're back within maxLead.
     const turningRound = this.turnarounds.some(t => Math.abs(runnerS - t) < TURN_GRACE);
-    const waitFor = (runner.stopped && !turningRound) || lead > this.maxLead + (this.state === 'wait' ? 0 : FAR_BEHIND);
+    const waitFor = !free && ((runner.stopped && !turningRound) || lead > this.maxLead + (this.state === 'wait' ? 0 : FAR_BEHIND));
 
     const blockedHere = blockedAt !== null && blockedAt - this.s < STOP_SHORT + 0.05;
     this.clearFor = blockedHere ? 0 : this.clearFor + dt;
@@ -240,12 +265,12 @@ export class Partner {
         })
       : 0;
     // A pacer takes stairs carefully; matching, the runner's own speed on them already does.
-    if (this.state === 'stairs' && this.pacing === 'goal') target = Math.min(target, this.goalPace * STAIRS_PACE);
+    if (this.state === 'stairs' && this.pacing !== 'match') target = Math.min(target, this.goalPace * STAIRS_PACE);
     this.speed += (target - this.speed) * Math.min(1, dt * SPEED_RATE);
     if (this.state === 'turn') {
       this.speed = 0;
       this.turnPause -= dt;
-      if (this.turnPause <= 0 && runnerS >= turnAt - TURN_WAIT) {
+      if (this.turnPause <= 0 && (free || runnerS >= turnAt - TURN_WAIT)) {
         this.nextTurn++;
         this.turnStarted = false;
       }
@@ -253,6 +278,12 @@ export class Partner {
       // Constant braking into the turn: v² = v_turn² + 2·a·d, reaching full pace TURN_SLOW out.
       const brake = (this.goalPace * this.goalPace - TURN_SPEED * TURN_SPEED) / (2 * TURN_SLOW);
       const cap = Math.sqrt(TURN_SPEED * TURN_SPEED + 2 * Math.max(0, brake) * Math.max(0, turnAt - this.s));
+      this.speed = Math.min(this.speed, cap);
+    }
+    if (free && this.finishAt < Infinity) {
+      // Into a race finish it eases up the same way, but crosses the line at a jog.
+      const brake = (this.goalPace * this.goalPace - FINISH_SPEED * FINISH_SPEED) / (2 * TURN_SLOW);
+      const cap = Math.sqrt(FINISH_SPEED * FINISH_SPEED + 2 * Math.max(0, brake) * Math.max(0, end - this.s));
       this.speed = Math.min(this.speed, cap);
     }
     if (suspectAt !== null && suspectAt - this.s < SUSPECT_SLOW) this.speed = Math.min(this.speed, SUSPECT_CREEP);

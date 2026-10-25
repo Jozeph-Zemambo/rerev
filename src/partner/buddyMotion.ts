@@ -11,6 +11,8 @@ export type Gait = {
   grade: number;
   /** Standing about before a run: idles, and waves now and then. */
   idle?: boolean;
+  /** Idling on the start line of a race: stands still, no waving. */
+  ready?: boolean;
   /** What the partner is doing, when it's on a run. */
   state?: PartnerState;
 };
@@ -24,6 +26,7 @@ export type BuddyMotion =
 
 /** Standing about: a wave (three flaps, ~1.8 s) every 4.5 s. */
 const IDLE: BuddyMotion = { kind: 'loop', clip: 'Idle', flourish: { clip: 'Wave', repeats: 3, every: 4.5 } };
+const READY: BuddyMotion = { kind: 'loop', clip: 'Idle' };
 /** Waiting for you to catch up: jog on the spot, and beckon "come on!" now and then. */
 const WAIT: BuddyMotion = { kind: 'loop', clip: 'JogInPlace', flourish: { clip: 'Beckon', repeats: 1, every: 6 } };
 const JOG_IN_PLACE: BuddyMotion = { kind: 'loop', clip: 'JogInPlace' };
@@ -57,7 +60,7 @@ export const SLOW_HYSTERESIS = 0.75;
  * hysteresis at the too-slow threshold); `height` is its height in metres.
  */
 export function buddyMotion(gait: Gait, running: boolean, height: number): BuddyMotion {
-  if (gait.idle) return IDLE;
+  if (gait.idle) return gait.ready ? READY : IDLE;
   switch (gait.state) {
     case 'wait':
       return WAIT;

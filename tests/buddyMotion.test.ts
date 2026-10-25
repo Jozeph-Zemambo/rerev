@@ -15,6 +15,10 @@ test('standing about before a run idles and waves', () => {
   assert.deepEqual(m.kind === 'loop' && [m.clip, m.flourish?.clip, m.flourish?.every], ['Idle', 'Wave', 4.5]);
 });
 
+test('on a race start line it stands ready, without waving', () => {
+  assert.deepEqual(buddyMotion(gait({ idle: true, ready: true }), false, H), { kind: 'loop', clip: 'Idle' });
+});
+
 test('running, stairs and looking ahead follow the speed', () => {
   for (const state of ['run', 'stairs', 'look'] as const) {
     assert.deepEqual(buddyMotion(gait({ state, speed: 1.6 }), false, H), { kind: 'pace', speed: 1.6 });

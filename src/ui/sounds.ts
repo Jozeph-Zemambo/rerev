@@ -21,6 +21,17 @@ export class Sounds {
     this.blip([988, 1319], 0.08, 0.16);
   }
 
+  /** Race countdown: a short beep on 3, 2, 1, and a higher, longer one on go. */
+  countdown(go: boolean) {
+    if (go) this.blip([1175], 0.32, 0.22);
+    else this.blip([659], 0.12, 0.18);
+  }
+
+  /** Crossing the finish line: a little rising fanfare. */
+  fanfare() {
+    this.blip([784, 988, 1175, 1568], 0.09, 0.16);
+  }
+
   private blip(frequencies: number[], step: number, volume: number) {
     const ctx = this.context;
     if (!ctx || ctx.state !== 'running') return;
