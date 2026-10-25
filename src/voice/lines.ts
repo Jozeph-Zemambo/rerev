@@ -21,7 +21,8 @@ export type LineCategory =
   | 'command'
   | 'chat'
   | 'confirm'
-  | 'idle';
+  | 'idle'
+  | 'booth';
 
 type LineSpec = {
   id: string;
@@ -137,6 +138,12 @@ const FIXED = [
   { id: 'idle_break_1', text: 'Take your time. Say "let\'s go" when you\'re ready.', mood: 'care', category: 'idle', note: 'Relaxed.' },
   { id: 'idle_break_2', text: 'Nice deep breaths. In, and out.', mood: 'care', category: 'idle', note: 'Slow and soothing.' },
   { id: 'idle_break_3', text: 'Shake out those legs!', mood: 'cheer', category: 'idle', note: 'Playful.' },
+
+  // Booth mode at the demo table: Rev (blue) and Vita (pink) say hello to whoever is looking.
+  { id: 'booth_rev_intro', text: "I'm Rev. That's Vita!", mood: 'cheer', category: 'booth', note: 'Rev. Friendly, a little proud; points out his friend.' },
+  { id: 'booth_rev_pace', text: "We'll pace you, wherever you run.", mood: 'cheer', category: 'booth', note: 'Rev. Easy confidence.' },
+  { id: 'booth_vita_race', text: 'Hi! Want to race?', mood: 'cheer', category: 'booth', note: 'Vita. Bright and cheeky, mid-wave.' },
+  { id: 'booth_vita_hello', text: "I'm Vita! Come run with us!", mood: 'cheer', category: 'booth', note: 'Vita. Bouncy, inviting.' },
 ] as const satisfies readonly LineSpec[];
 
 const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
@@ -192,6 +199,11 @@ export const COIN_QUIPS: readonly LineId[] = ['coin_1', 'coin_2', 'coin_3', 'coi
 export const RUN_STARTS: readonly LineId[] = ['run_start_1', 'run_start_2', 'run_start_3'];
 export const IDLE_WAIT: readonly LineId[] = ['idle_wait_1', 'idle_wait_2', 'idle_wait_3'];
 export const IDLE_BREAK: readonly LineId[] = ['idle_break_1', 'idle_break_2', 'idle_break_3'];
+/** At the booth, each buddy's own lines, by colour (blue = Rev, pink = Vita). */
+export const BOOTH_LINES: { readonly blue: readonly LineId[]; readonly pink: readonly LineId[] } = {
+  blue: ['booth_rev_intro', 'booth_rev_pace'],
+  pink: ['booth_vita_race', 'booth_vita_hello'],
+};
 
 /**
  * A moment the buddy speaks: which line the voice says, and optionally richer text for the

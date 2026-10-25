@@ -92,6 +92,21 @@ export class Hud {
     this.courseRedoButton.hidden = stage !== 'recording';
   }
 
+  private readonly boothPanel = byId('booth-panel');
+  readonly boothMoveButton = byId<HTMLButtonElement>('btn-booth-move');
+  readonly boothExitButton = byId<HTMLButtonElement>('btn-booth-exit');
+
+  /** Booth mode's Move and Exit (Move once there's a buddy to move). */
+  showBoothPanel(visible: boolean, canMove = false) {
+    this.boothPanel.hidden = !visible;
+    this.boothMoveButton.hidden = !canMove;
+  }
+
+  /** The message strip; the booth hides it once both buddies stand, to leave the view clear. */
+  showMessage(visible: boolean) {
+    this.message.hidden = !visible;
+  }
+
   /** Next turn on a map route, or null to hide the chip. */
   showTurn(turn: { modifier: string; street: string; metres: number } | null) {
     this.turn.hidden = !turn;

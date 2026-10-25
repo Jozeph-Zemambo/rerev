@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { LINES, isLineId, MAX_KM_LINE, MAX_LAP_LINE, ENCOURAGEMENT, PUSH, COIN_QUIPS, RUN_STARTS, IDLE_WAIT, IDLE_BREAK } from '../src/voice/lines';
+import { LINES, isLineId, MAX_KM_LINE, MAX_LAP_LINE, ENCOURAGEMENT, PUSH, COIN_QUIPS, RUN_STARTS, IDLE_WAIT, IDLE_BREAK, BOOTH_LINES } from '../src/voice/lines';
 import { ACTION_LINES, ACTIONS, DECISION_LINE_IDS, decisionSchema, parseDecision, sanitiseDecision } from '../src/voice/decisions';
 
 test('line ids are unique and safe as file names', () => {
@@ -30,7 +30,7 @@ test('every line id written in the code is in the catalog', () => {
   };
   walk('src');
   walk('convex');
-  const prefixes = /^(coach|turn|split|route|lap|hazard|run|coin|cmd|chat|confirm|idle)_[a-z0-9_]+$/;
+  const prefixes = /^(coach|turn|split|route|lap|hazard|run|coin|cmd|chat|confirm|idle|booth)_[a-z0-9_]+$/;
   let checked = 0;
   for (const file of files) {
     if (file.includes('_generated')) continue;
@@ -45,7 +45,7 @@ test('every line id written in the code is in the catalog', () => {
 });
 
 test('line groups said in rotation only hold real lines', () => {
-  for (const group of [ENCOURAGEMENT, PUSH, COIN_QUIPS, RUN_STARTS, IDLE_WAIT, IDLE_BREAK]) {
+  for (const group of [ENCOURAGEMENT, PUSH, COIN_QUIPS, RUN_STARTS, IDLE_WAIT, IDLE_BREAK, BOOTH_LINES.blue, BOOTH_LINES.pink]) {
     assert.ok(group.length > 1);
     for (const id of group) assert.ok(isLineId(id), id);
   }

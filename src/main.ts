@@ -10,8 +10,9 @@ import { BluetoothHeartRate, type BluetoothState } from './heart/bluetoothHeartR
 import { HeartRateFeed } from './heart/heartRateFeed';
 import { formatPace, Hud } from './hud';
 import { Coach } from './partner/coach';
+import { Booth } from './booth/booth';
 import { BUDDY_NAMES, BUDDY_PITCH, type BuddyColor } from './partner/buddies';
-import { Mascot } from './partner/mascot';
+import { BUDDY_HEIGHT, Mascot } from './partner/mascot';
 import { Partner, type PartnerState } from './partner/partner';
 import { RouteCallouts } from './run/callouts';
 import { RunRecorder } from './run/recorder';
@@ -40,7 +41,7 @@ import { createShadow } from './world/shadow';
 import { SurfaceMap } from './world/surfaceMap';
 
 /** `course` is "Walk your course": record a walk in AR, then run it, as often as you like. */
-type RunMode = { kind: 'quick' } | { kind: 'course' } | { kind: 'route'; goal: RunGoal };
+type RunMode = { kind: 'quick' } | { kind: 'course' } | { kind: 'route'; goal: RunGoal } | { kind: 'booth' };
 
 const QUICK_LENGTH = 20;
 const QUICK_PACE = 1.6;
@@ -155,8 +156,11 @@ scene.add(path.group);
 const markers = new HazardMarkers();
 scene.add(markers.mesh);
 const mascot = new Mascot(savedBuddy());
+/** Which buddy runs with you (the other only shows up in booth mode). */
+let buddyColor = savedBuddy();
 /** Rev or Vita: their voice, and their name on the run HUD and summary. */
 function useBuddy(color: BuddyColor) {
+  buddyColor = color;
   voice.pitch = BUDDY_PITCH[color];
   hud.setBuddyName(BUDDY_NAMES[color]);
   summaryScreen.buddyName = BUDDY_NAMES[color];
@@ -171,6 +175,7 @@ scene.add(mascot.root);
 const shadow = createShadow();
 shadow.visible = false;
 scene.add(shadow);
+const booth = new Booth(scene, hud.root, voice);
 const partner = new Partner(path);
 const collectibles = new Collectibles();
 scene.add(collectibles.group);
@@ -265,6 +270,14 @@ byId('go-course').onclick = () => {
   askForMicrophone();
   void startRun({ kind: 'course' });
 };
+// No microphone for the booth: nobody talks to it, and it shouldn't ask.
+byId('go-booth').onclick = () => startBooth();
+hud.boothMoveButton.onclick = () => {
+  booth.move();
+  // The laptop preview has nowhere to tap: stand them back on their spots.
+  if (sim.world) placeBoothPreview();
+};
+hud.boothExitButton.onclick = () => void leaveRun();
 
 /**
  * Ask for the microphone from a tap on a normal screen, so voice commands don't need a
@@ -480,6 +493,7 @@ function endRun() {
   mode = null;
   routeRun = null;
   resetCourse();
+  stopBooth();
   reticle.visible = false;
   mascot.root.visible = false;
   shadow.visible = false;
@@ -600,7 +614,8 @@ async function startAr() {
   // depthSensing is not in the WebXR typings yet but Chrome reads it.
   const init = {
     requiredFeatures: ['hit-test'],
-    optionalFeatures: ['dom-overlay', 'depth-sensing'],
+    // The booth only places buddies, so it leaves the depth camera off.
+    optionalFeatures: mode?.kind === 'booth' ? ['dom-overlay'] : ['dom-overlay', 'depth-sensing'],
     depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] },
     domOverlay: { root: hud.root },
   } as XRSessionInit;
@@ -614,6 +629,7 @@ async function startAr() {
     void session?.end().catch(() => {});
     mode = null;
     routeRun = null;
+    stopBooth();
     alert(`Couldn't start AR: ${(error as Error).message}`);
   }
 }
@@ -631,6 +647,10 @@ renderer.xr.addEventListener('sessionstart', async () => {
   reticle.visible = false;
   showRunUi(true);
   hud.showControls(false);
+  if (mode?.kind === 'booth') {
+    hud.say(booth.message(false));
+    return;
+  }
   const where = routeRun
     ? 'Face the way your route starts, point at the ground and tap.'
     : mode?.kind === 'course'
@@ -647,6 +667,10 @@ renderer.xr.addEventListener('sessionend', () => {
 
 const controller = renderer.xr.getController(0);
 controller.addEventListener('select', () => {
+  if (mode?.kind === 'booth') {
+    if (booth.placing && reticle.visible) booth.place(new THREE.Vector3().setFromMatrixPosition(reticle.matrix), viewerPosition(new THREE.Vector3()));
+    return;
+  }
   // A course starts from its Record and Done buttons, not a tap on the floor.
   if (placed || !reticle.visible || mode?.kind === 'course') return;
   placeAt(new THREE.Vector3().setFromMatrixPosition(reticle.matrix), renderer.xr.getCamera().matrixWorld);
@@ -841,6 +865,86 @@ function beforeRun(dt: number, seconds: number, now: number, sensorTick: boolean
   mascot.update(dt, seconds, { speed: 0, inPlace: false, grade: 0, idle: true });
   shadow.position.set(idle.at.x, idle.at.y + 0.003, idle.at.z);
   bubble.update(idle.at, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera, now);
+}
+
+// ---------------------------------------------------------------- booth
+
+/**
+ * Booth mode, for the demo table: tap where Rev stands, then where Vita stands, on the floor
+ * or the table, and they stay there in the room. No run. `?booth-ar` shows it on a laptop.
+ */
+function startBooth() {
+  mode = { kind: 'booth' };
+  routeRun = null;
+  following = false;
+  unlockAudio();
+  booth.start(mascot, buddyColor);
+  hud.showBoothPanel(true);
+  if (arSupported && !boothPreviewOnly()) void startAr();
+  else startBoothPreview();
+}
+
+function boothPreviewOnly() {
+  return new URLSearchParams(location.search).has('booth-ar');
+}
+
+function stopBooth() {
+  if (!booth.active) return;
+  booth.stop();
+  hud.showBoothPanel(false);
+  hud.showMessage(true);
+}
+
+const ringScale = new THREE.Matrix4();
+
+/**
+ * Booth AR: the ring goes on any flat surface facing up, a table top as much as the floor
+ * (unlike a run's, which keeps to floor-like ground well below the phone). Every flat surface
+ * seen also tells the booth where the floor is, so it can tell a table from the floor. The ring
+ * shrinks to show when the buddy will stand there as a figurine.
+ */
+function boothReticle(poses: (XRPose | undefined)[], phoneY: number) {
+  const flat = poses.filter((p): p is XRPose => !!p && p.transform.matrix[5] > 0.9);
+  for (const p of flat) booth.noteSurface(p.transform.position.y, phoneY);
+  const pose = booth.placing ? flat[0] : undefined;
+  reticle.visible = !!pose;
+  if (!pose) return;
+  const size = booth.heightOn(pose.transform.position.y, phoneY) / BUDDY_HEIGHT;
+  reticle.matrix.fromArray(pose.transform.matrix).multiply(ringScale.makeScale(size, size, size));
+}
+
+/** Every frame in booth mode: the buddies, and the one line of help while they're being placed. */
+function boothFrame(dt: number, seconds: number, now: number) {
+  if (!sim.world && !renderer.xr.isPresenting) return;
+  booth.update(dt, seconds, now, viewerPosition(viewerAt), renderer.xr.isPresenting ? renderer.xr.getCamera() : camera);
+  const placing = booth.placing;
+  hud.showMessage(!!placing);
+  if (placing) hud.say(booth.message(reticle.visible));
+  hud.showBoothPanel(true, placing !== 'blue');
+}
+
+/**
+ * Laptop preview of the booth: sat at a table with the floor beyond it. Rev stands on the floor
+ * to the right at full size, Vita on the table to the left as a figurine, both placed through the
+ * same size rule as on a phone.
+ */
+function startBoothPreview() {
+  showRunUi(true);
+  hud.showControls(false);
+  scene.background = new THREE.Color(0x1d2b33);
+  sim.world = new PreviewWorld(false, 30);
+  sim.world.addBox(-0.35, -1.35, 1.1, 0.75, 0.7);
+  scene.add(sim.world.group);
+  camera.position.set(0, 1.15, 0);
+  camera.lookAt(0.2, 0.55, -2);
+  placeBoothPreview();
+}
+
+function placeBoothPreview() {
+  const phone = camera.position;
+  booth.noteSurface(0, phone.y);
+  booth.place(new THREE.Vector3(1.0, 0, -2.3), phone);
+  booth.place(new THREE.Vector3(-0.45, 0.75, -1.3), phone);
 }
 
 // ---------------------------------------------------------------- desktop preview
@@ -1219,7 +1323,10 @@ renderer.setAnimationLoop((time, frame) => {
   if (frame && referenceSpace) {
     const viewer = frame.getViewerPose(referenceSpace);
     trackingLost = !viewer || viewer.emulatedPosition;
-    if (hitTestSource && !placed) {
+    if (hitTestSource && mode?.kind === 'booth') {
+      const hits = frame.getHitTestResults(hitTestSource).map(hit => hit.getPose(referenceSpace));
+      boothReticle(hits, viewer?.transform.position.y ?? 0);
+    } else if (hitTestSource && !placed) {
       // Only floor-like surfaces: facing up (not a wall) and well below the phone (not a table).
       const cameraY = viewer?.transform.position.y ?? 0;
       const pose = frame
@@ -1236,7 +1343,8 @@ renderer.setAnimationLoop((time, frame) => {
     if (placed || course.phase === 'recording') rayHits = groundRays.sample(frame, referenceSpace, map, now);
   }
 
-  if (!placed && mode) beforeRun(dt, seconds, now, sensorTick, trackingLost, frame, referenceSpace);
+  if (mode?.kind === 'booth') boothFrame(dt, seconds, now);
+  else if (!placed && mode) beforeRun(dt, seconds, now, sensorTick, trackingLost, frame, referenceSpace);
 
   if (placed && mode) {
     let runnerS: number;
@@ -1339,9 +1447,12 @@ addEventListener('resize', () => {
 });
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { rerev: { path, partner, mascot, map, camera, sim, follow, coach, heart, commands, recorder, voice, hear, getRouteRun: () => routeRun } });
+  Object.assign(window, { rerev: { path, partner, mascot, map, camera, sim, follow, coach, heart, commands, recorder, voice, hear, booth, getRouteRun: () => routeRun } });
 }
 
 void (async () => {
   arSupported = (await navigator.xr?.isSessionSupported('immersive-ar').catch(() => false)) ?? false;
 })();
+
+// `?booth-ar`: straight into the booth's laptop preview.
+if (boothPreviewOnly()) startBooth();
