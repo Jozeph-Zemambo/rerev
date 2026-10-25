@@ -81,6 +81,38 @@ const DISTRUST_BELOW = -0.1;
 const DISTRUST_MIN_POINTS = 20;
 const TRUST_FLOOR_AGREEMENT = 0.6;
 
+/**
+ * Every threshold above, by name, so experiments (the field-test replay) can try other values.
+ * The app always uses these defaults.
+ */
+export const DEFAULT_TUNING = {
+  obstacleMin: OBSTACLE_MIN,
+  obstacleMax: OBSTACLE_MAX,
+  groundBand: GROUND_BAND,
+  dropMin: DROP_MIN,
+  dropMax: DROP_MAX,
+  obstacleVotes: OBSTACLE_VOTES,
+  dropVotes: DROP_VOTES,
+  voteWindow: VOTE_WINDOW,
+  clearAfter: CLEAR_AFTER,
+  remember: REMEMBER,
+  referenceRings: REFERENCE_RINGS,
+  noiseFrom: NOISE_FROM,
+  noisePerMetre: NOISE_PER_METRE,
+  maxGroundWeight: MAX_GROUND_WEIGHT,
+  trustedWeight: TRUSTED_WEIGHT,
+  rebaseVotes: REBASE_VOTES,
+  rebaseWindow: REBASE_WINDOW,
+  rebaseAgree: REBASE_AGREE,
+  rebaseMax: REBASE_MAX,
+  nearRange: NEAR_RANGE,
+  distrustBelow: DISTRUST_BELOW,
+  distrustMinPoints: DISTRUST_MIN_POINTS,
+  trustFloorAgreement: TRUST_FLOOR_AGREEMENT,
+};
+
+export type SurfaceTuning = { [K in keyof typeof DEFAULT_TUNING]: number };
+
 type Vote = { count: number; at: number; confirmed: boolean };
 
 type Cell = {
@@ -96,8 +128,8 @@ type Cell = {
   rebase: { count: number; at: number; y: number };
 };
 
-const hazardActive = (vote: Vote, floorSeenAt: number, now: number) =>
-  vote.confirmed && now - vote.at < REMEMBER && floorSeenAt - vote.at < CLEAR_AFTER;
+const hazardActive = (vote: Vote, floorSeenAt: number, now: number, t: SurfaceTuning) =>
+  vote.confirmed && now - vote.at < t.remember && floorSeenAt - vote.at < t.clearAfter;
 
 const OFFSET = 32768;
 const keyOf = (ix: number, iz: number) => (ix + OFFSET) * 65536 + (iz + OFFSET);
@@ -119,6 +151,12 @@ export class SurfaceMap {
   distrustedFrames = 0;
   /** Running share of trusted floor detections that agree with the map (1 = all agree). */
   private floorAgreement = 1;
+  /** Thresholds in use: the defaults, unless an experiment overrides some. */
+  readonly tuning: SurfaceTuning;
+
+  constructor(tuning: Partial<SurfaceTuning> = {}) {
+    this.tuning = { ...DEFAULT_TUNING, ...tuning };
+  }
 
   /** How far a trusted ground sample may sit from the known ground and still count as ground. */
   groundTolerance(base: number) {
@@ -171,11 +209,12 @@ export class SurfaceMap {
 
   /** Ground height to compare new points against: this cell's, else the nearest known ring's. */
   referenceGround(x: number, z: number): number | null {
+    const t = this.tuning;
     const cx = cellIndex(x);
     const cz = cellIndex(z);
     const own = this.cells.get(keyOf(cx, cz));
     if (own && own.groundWeight > 0) return own.ground;
-    for (let ring = 1; ring <= REFERENCE_RINGS; ring++) {
+    for (let ring = 1; ring <= t.referenceRings; ring++) {
       let sum = 0;
       let weight = 0;
       for (let dx = -ring; dx <= ring; dx++) {
@@ -198,18 +237,19 @@ export class SurfaceMap {
    * agrees with the surrounding ground, so the top of a box is not mistaken for floor.
    */
   addGroundSample(x: number, y: number, z: number, weight = 1, tolerance = 0.08, now = -Infinity) {
+    const t = this.tuning;
     const reference = this.referenceGround(x, z);
     const rejected = reference !== null && Math.abs(y - reference) > tolerance;
     if (weight >= 1) this.probe?.ground(reference === null ? null : y - reference, !rejected, weight);
-    if (weight >= TRUSTED_WEIGHT && reference !== null) this.floorAgreement += ((rejected ? 0 : 1) - this.floorAgreement) * 0.05;
+    if (weight >= t.trustedWeight && reference !== null) this.floorAgreement += ((rejected ? 0 : 1) - this.floorAgreement) * 0.05;
     if (rejected) {
-      if (weight >= TRUSTED_WEIGHT && Math.abs(y - reference!) <= REBASE_MAX) this.voteRebase(x, y, z, now);
+      if (weight >= t.trustedWeight && Math.abs(y - reference!) <= t.rebaseMax) this.voteRebase(x, y, z, now);
       return;
     }
     const cell = this.cell(cellIndex(x), cellIndex(z));
     const total = cell.groundWeight + weight;
     cell.ground = cell.groundWeight > 0 ? (cell.ground * cell.groundWeight + y * weight) / total : y;
-    cell.groundWeight = Math.min(total, MAX_GROUND_WEIGHT);
+    cell.groundWeight = Math.min(total, t.maxGroundWeight);
     cell.floorSeenAt = Math.max(cell.floorSeenAt, now);
   }
 
@@ -225,15 +265,16 @@ export class SurfaceMap {
    * `camera` is where the phone was, for the field-test depth check.
    */
   addDepthFrame(points: readonly { x: number; y: number; z: number; d: number }[], now: number, camera?: { x: number; y: number; z: number }) {
+    const t = this.tuning;
     const near: number[] = [];
     for (const p of points) {
-      if (p.d >= NEAR_RANGE) continue;
+      if (p.d >= t.nearRange) continue;
       const reference = this.referenceGround(p.x, p.z);
       if (reference !== null) near.push(p.y - reference);
     }
     near.sort((a, b) => a - b);
-    const sinking = near.length >= DISTRUST_MIN_POINTS && near[near.length >> 1] <= DISTRUST_BELOW;
-    const dropsTrusted = !(sinking && this.floorAgreement >= TRUST_FLOOR_AGREEMENT);
+    const sinking = near.length >= t.distrustMinPoints && near[near.length >> 1] <= t.distrustBelow;
+    const dropsTrusted = !(sinking && this.floorAgreement >= t.trustFloorAgreement);
     if (!dropsTrusted) this.distrustedFrames++;
     for (const p of points) {
       if (camera && this.probe?.ratio) {
@@ -247,13 +288,14 @@ export class SurfaceMap {
   }
 
   addDepthPoint(x: number, y: number, z: number, now: number, range = 0, dropsTrusted = true) {
+    const t = this.tuning;
     const reference = this.referenceGround(x, z);
     if (reference === null) {
       this.probe?.depth(NaN, range, 'no ground');
       return;
     }
     const height = y - reference;
-    if (Math.abs(height) <= GROUND_BAND) {
+    if (Math.abs(height) <= t.groundBand) {
       this.probe?.depth(height, range, 'ground');
       // Depth may mark ground as seen, but never moves its height: biased depth would drag the
       // ground along with it, one cell at a time. Heights come from the phone's floor detection.
@@ -265,14 +307,14 @@ export class SurfaceMap {
       cell.floorSeenAt = Math.max(cell.floorSeenAt, now);
       return;
     }
-    const margin = NOISE_PER_METRE * Math.max(0, range - NOISE_FROM);
-    const isObstacle = height >= Math.max(OBSTACLE_MIN, this.walkableStep) + margin && height <= OBSTACLE_MAX;
-    const isDrop = dropsTrusted && height <= -(Math.max(DROP_MIN, this.walkableStep) + margin) && height >= -DROP_MAX;
+    const margin = t.noisePerMetre * Math.max(0, range - t.noiseFrom);
+    const isObstacle = height >= Math.max(t.obstacleMin, this.walkableStep) + margin && height <= t.obstacleMax;
+    const isDrop = dropsTrusted && height <= -(Math.max(t.dropMin, this.walkableStep) + margin) && height >= -t.dropMax;
     this.probe?.depth(height, range, isObstacle ? 'obstacle' : isDrop ? 'drop' : Math.abs(height) > 1.5 ? 'out of range' : 'between');
     if (!isObstacle && !isDrop) return;
     const cell = this.cell(cellIndex(x), cellIndex(z));
     if (cell.groundWeight === 0) cell.ground = reference;
-    vote(isObstacle ? cell.obstacle : cell.drop, isObstacle ? OBSTACLE_VOTES : DROP_VOTES, cell.floorSeenAt, now);
+    vote(isObstacle ? cell.obstacle : cell.drop, isObstacle ? t.obstacleVotes : t.dropVotes, cell.floorSeenAt, now, t);
     if (isObstacle) {
       // Rise quickly to new highs, sink slowly, so the top follows the surface, not stray spikes.
       if (cell.obstacle.count === 1) cell.top = y;
@@ -346,17 +388,18 @@ export class SurfaceMap {
   }
 
   private voteRebase(x: number, y: number, z: number, now: number) {
+    const t = this.tuning;
     const time = Number.isFinite(now) ? now : performance.now() / 1000;
     const cell = this.cell(cellIndex(x), cellIndex(z));
     const rebase = cell.rebase;
-    if (time - rebase.at > REBASE_WINDOW || Math.abs(y - rebase.y) > REBASE_AGREE) {
+    if (time - rebase.at > t.rebaseWindow || Math.abs(y - rebase.y) > t.rebaseAgree) {
       rebase.count = 0;
       rebase.y = y;
     }
     rebase.count++;
     rebase.at = time;
     rebase.y += (y - rebase.y) / rebase.count;
-    if (rebase.count < REBASE_VOTES) return;
+    if (rebase.count < t.rebaseVotes) return;
     cell.ground = rebase.y;
     cell.groundWeight = 3;
     cell.drop = { count: 0, at: -Infinity, confirmed: false };
@@ -367,11 +410,11 @@ export class SurfaceMap {
   }
 
   private isObstacle(cell: Cell, now: number) {
-    return hazardActive(cell.obstacle, cell.floorSeenAt, now);
+    return hazardActive(cell.obstacle, cell.floorSeenAt, now, this.tuning);
   }
 
   private isDrop(cell: Cell, now: number) {
-    return hazardActive(cell.drop, cell.floorSeenAt, now);
+    return hazardActive(cell.drop, cell.floorSeenAt, now, this.tuning);
   }
 
   private cell(ix: number, iz: number): Cell {
@@ -394,8 +437,8 @@ export class SurfaceMap {
 }
 
 /** Count a hazard sighting. Unconfirmed votes must arrive close together; a cleared hazard starts over. */
-function vote(v: Vote, needed: number, floorSeenAt: number, now: number) {
-  const stale = v.confirmed ? !hazardActive(v, floorSeenAt, now) : now - v.at > VOTE_WINDOW;
+function vote(v: Vote, needed: number, floorSeenAt: number, now: number, t: SurfaceTuning) {
+  const stale = v.confirmed ? !hazardActive(v, floorSeenAt, now, t) : now - v.at > t.voteWindow;
   if (stale) {
     v.count = 0;
     v.confirmed = false;

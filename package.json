@@ -10,11 +10,14 @@
     "bridge": "node bridge/hr-bridge.mjs",
     "bench:align": "npx --yes tsx scripts/align-bench.ts",
     "voice:lines": "npx --yes tsx scripts/voice-lines.ts",
+    "replay": "npx --yes tsx scripts/replay.ts",
     "test": "npx --yes tsx --test tests/*.test.ts",
+    "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
     "deploy": "npm run build && npx --yes wrangler deploy"
   },
   "devDependencies": {
     "@types/leaflet": "^1.9.22",
+    "@types/node": "^22.20.5",
     "@types/three": "^0.186.0",
     "typescript": "~6.0.3",
     "vite": "^8.3.4",
