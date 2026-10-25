@@ -1,0 +1,8 @@
+{
+  // Typechecks the field-replay script and its test, which run in Node (tsx), not the browser.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "webxr", "vite/client"]
+  },
+  "include": ["scripts/replay.ts", "tests/replay.test.ts"]
+}

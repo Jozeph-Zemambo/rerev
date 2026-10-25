@@ -25,3 +25,6 @@ dist-ssr
 
 # Recording script written by npm run voice:lines
 voice-script
+
+# Field-test sessions cached by npm run replay (raw sensor data, not for the repo)
+field-recordings/
