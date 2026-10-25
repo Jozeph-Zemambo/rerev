@@ -16,12 +16,18 @@ type Band = { verdicts: Record<string, number>; hist: number[] };
 type Entry = { t: number; kind: string; data: unknown };
 
 /**
- * Field-test mode (`?field` in the link): records what the sensors and the surface map are
- * doing while you walk around outside, and uploads it to Convex so it can be studied
- * afterwards. Heights are histograms, not raw points, to keep the upload small.
+ * Field-test mode: records what the sensors and the surface map are doing while you walk
+ * around outside, and uploads it to Convex so it can be studied afterwards. Heights are
+ * histograms, not raw points, to keep the upload small.
+ *
+ * On by default while the outdoor thresholds are being tuned; `?nofield` turns it off.
  */
+export const FIELD_TEST = !new URLSearchParams(location.search).has('nofield');
+
 export class FieldLog implements SurfaceProbe {
-  readonly enabled = new URLSearchParams(location.search).has('field');
+  readonly enabled = FIELD_TEST;
+  /** The last snapshot's depth and ground-sample statistics, for the on-screen readout. */
+  last: { bands: Band[]; ground: { accepted: number; rejected: number; unknown: number; hist: number[] } } | null = null;
   readonly session = `${new Date().toISOString().slice(0, 16)}-${Math.random().toString(36).slice(2, 6)}`;
   sent = 0;
   failed = 0;
@@ -70,6 +76,7 @@ export class FieldLog implements SurfaceProbe {
         kind: 'tick',
         data: { ...snapshot(), depth: this.bands, groundSamples: this.groundStats },
       });
+      this.last = { bands: this.bands, ground: this.groundStats };
       this.resetCounts();
     }
     if (now - this.lastUpload >= UPLOAD_EVERY) {
@@ -103,6 +110,44 @@ export class FieldLog implements SurfaceProbe {
     }));
     this.groundStats = { accepted: 0, rejected: 0, unknown: 0, hist: new Array(HALF_BINS * 2 + 2).fill(0) };
   }
+}
+
+/** Readout lines from a snapshot: per distance band, what the depth said and how high it was. */
+export function summaryRows(last: NonNullable<FieldLog['last']>): [string, string][] {
+  const names = ['depth <2m', 'depth 2-3.5', 'depth 3.5+'];
+  const rows: [string, string][] = last.bands.map((band, i) => {
+    const v = band.verdicts;
+    const judged = v.ground + v.obstacle + v.drop + v.between;
+    if (judged === 0) return [names[i], v['no ground'] ? `${v['no ground']} pts, no ground known yet` : 'no points'];
+    const pct = (n: number) => `${Math.round((100 * n) / judged)}%`;
+    return [names[i], `gnd ${pct(v.ground)} drop ${pct(v.drop)} obs ${pct(v.obstacle)} mid ${cm(medianOf(band.hist))}`];
+  });
+  const g = last.ground;
+  const total = g.accepted + g.rejected;
+  rows.push(['floor hits', total === 0 ? `${g.unknown}, no ground known yet` : `${g.accepted}/${total} agree, typ. off ${cm(medianOf(g.hist))}`]);
+  return rows;
+}
+
+function cm(metres: number | null) {
+  if (metres === null) return '–';
+  const value = Math.round(metres * 100);
+  return `${value > 0 ? '+' : ''}${value} cm`;
+}
+
+/** Median of a binned histogram (centre of the median bin), or null if empty. */
+function medianOf(hist: number[]): number | null {
+  const total = hist.reduce((a, b) => a + b, 0);
+  if (total === 0) return null;
+  let seen = 0;
+  for (let i = 0; i < hist.length; i++) {
+    seen += hist[i];
+    if (seen >= total / 2) {
+      if (i === 0) return -HALF_BINS * BIN;
+      if (i === hist.length - 1) return HALF_BINS * BIN;
+      return (i - HALF_BINS - 1 + 0.5) * BIN;
+    }
+  }
+  return null;
 }
 
 /** Bin index: 0 = below −40 cm, 1..40 = 2 cm steps, 41 = above +40 cm. */

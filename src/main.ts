@@ -21,7 +21,7 @@ import { savedBuddy, setupBuddyPicker } from './ui/buddyPicker';
 import { SpeechBubble } from './ui/speechBubble';
 import { showRecentRuns, SummaryScreen } from './ui/summary';
 import { Diagnostics } from './ui/diagnostics';
-import { FieldLog } from './debug/fieldLog';
+import { FieldLog, summaryRows } from './debug/fieldLog';
 import { LineVoice } from './ui/voice';
 import { VoiceCommands } from './ui/voiceCommands';
 import { PendingQuestion, routeTranscript } from './voice/conversation';
@@ -161,6 +161,8 @@ const diagnostics = new Diagnostics(byId('lead-stat'));
 const field = new FieldLog(convex);
 if (field.enabled) map.probe = field;
 let depthPoints = 0;
+/** How high the phone was above the floor it found when the run started (field testing). */
+let phoneAboveFloor: number | null = null;
 let rayHits = 0;
 
 let arSupported = false;
@@ -480,12 +482,14 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   map.walkableStep = routeRun ? KERB : 0;
   const view = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
   const phone = new THREE.Vector3().setFromMatrixPosition(view.matrixWorld);
+  phoneAboveFloor = phone.y - floorY;
   field.event('run start', {
     mode: mode?.kind,
     floorY: r3(floorY),
     phone: phone.toArray().map(r3),
     // Standing upright this is ~1.3-1.5 m; much less means the floor was found too high.
     phoneAboveFloor: r3(phone.y - floorY),
+    lowered: map.lowered,
     walkableStep: map.walkableStep,
     pathLength: r3(points.length),
   });
@@ -1111,13 +1115,13 @@ function diagnosticRows(runnerS: number, trackingLost: boolean): [string, string
   }
   if (field.enabled) {
     const cells = map.hazardCells(runner.x, runner.z, 6, performance.now() / 1000, []);
-    const ahead = path.pointAt(runnerS + 3, new THREE.Vector3());
-    const ref = map.referenceGround(ahead.x, ahead.z);
     rows.push(
-      ['hazards', `${cells.filter(c => c.kind === 'obstacle').length} obstacle, ${cells.filter(c => c.kind === 'drop').length} drop cells within 6 m`],
+      ['phone', `${phoneAboveFloor === null ? '?' : phoneAboveFloor.toFixed(2)} m over tapped floor (~1.4 ok)`],
+      ...(field.last ? summaryRows(field.last) : []),
+      ['lowered', `${map.lowered} cells moved down to floor hits`],
+      ['hazards', `${cells.filter(c => c.kind === 'obstacle').length} obstacle, ${cells.filter(c => c.kind === 'drop').length} drop cells (6 m)`],
       ['blocked', path.status.blockedAtS === null ? 'no' : `${path.status.blockReason} at +${(path.status.blockedAtS - runnerS).toFixed(1)} m`],
-      ['ground', `path 3 m ahead at ${ahead.y.toFixed(2)}, map says ${ref === null ? '?' : ref.toFixed(2)}`],
-      ['field log', `${field.session}, ${field.sent} sent${field.failed ? `, ${field.failed} failed` : ''}`],
+      ['log', `${field.session} · ${field.sent} sent${field.failed ? ` · ${field.failed} failed` : ''}`],
     );
   }
   return rows;
@@ -1154,6 +1158,7 @@ function fieldSnapshot(now: number, runnerS: number, trackingLost: boolean): Rec
     rayHits,
     walkableStep: map.walkableStep,
     mapCells: map.size,
+    lowered: map.lowered,
     gps: gps.latest ? { accuracy: gps.latest.accuracy } : null,
   };
 }
