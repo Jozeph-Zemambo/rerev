@@ -92,7 +92,7 @@ export class PreviewWorld {
       }
     }
     points.sort((a, b) => a.d - b.d);
-    map.addDepthFrame(points.map(({ d, p }) => ({ x: p.x, y: p.y, z: p.z, d })), now);
+    map.addDepthFrame(points.map(({ d, p }) => ({ x: p.x, y: p.y, z: p.z, d })), now, camera.position);
   }
 
   /** Simulated AR hit-tests: a few rays angled down at the ground ahead. */

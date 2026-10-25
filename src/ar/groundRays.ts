@@ -16,6 +16,8 @@ const RAYS: [pitch: number, yaw: number][] = [
  */
 export class GroundRays {
   private sources: XRHitTestSource[] = [];
+  /** Floor hits since the field log last took them (field-test recording only). */
+  readonly recent: number[][] = [];
 
   async start(session: XRSession) {
     this.stop();
@@ -41,6 +43,7 @@ export class GroundRays {
       if (!pose) continue;
       const { x, y, z } = pose.transform.position;
       map.addGroundSample(x, y, z, 2, map.groundTolerance(0.1));
+      if (this.recent.length < 200) this.recent.push([x, y, z]);
       hits++;
     }
     return hits;

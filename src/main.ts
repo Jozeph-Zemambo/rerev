@@ -21,6 +21,7 @@ import { savedBuddy, setupBuddyPicker } from './ui/buddyPicker';
 import { SpeechBubble } from './ui/speechBubble';
 import { showRecentRuns, SummaryScreen } from './ui/summary';
 import { Diagnostics } from './ui/diagnostics';
+import { FieldLog, summaryRows } from './debug/fieldLog';
 import { LineVoice } from './ui/voice';
 import { VoiceCommands } from './ui/voiceCommands';
 import { PendingQuestion, routeTranscript } from './voice/conversation';
@@ -156,7 +157,19 @@ let idleLine = 0;
 const depthSensor = new DepthSensor();
 const groundRays = new GroundRays();
 const diagnostics = new Diagnostics(byId('lead-stat'));
+/** Field-test recording (`?field`): raw sensor and surface-map data, uploaded to Convex. */
+const field = new FieldLog(convex);
+if (field.enabled) map.probe = field;
+// Field testing: tap whenever something looks wrong, so the moment is easy to find later.
+const markButton = byId<HTMLButtonElement>('field-mark');
+markButton.onclick = () => {
+  field.mark({ state: partner.state, buddyS: partner.s, blockedAtS: path.status.blockedAtS, reason: path.status.blockReason });
+  markButton.textContent = `Marked ${field.marks}`;
+  window.setTimeout(() => (markButton.textContent = 'Mark'), 1200);
+};
 let depthPoints = 0;
+/** How high the phone was above the floor it found when the run started (field testing). */
+let phoneAboveFloor: number | null = null;
 let rayHits = 0;
 
 let arSupported = false;
@@ -440,6 +453,9 @@ function clearRunScene() {
 }
 
 function endRun() {
+  markButton.hidden = true;
+  field.event('run end', { distance: recorder.distanceSoFar });
+  field.upload();
   const summary = placed ? recorder.finish(performance.now() / 1000) : null;
   placed = false;
   mode = null;
@@ -472,6 +488,24 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   // A course keeps what the map learned while you walked it.
   if (mode?.kind !== 'course') map.reset();
   map.walkableStep = routeRun ? KERB : 0;
+  const view = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const phone = new THREE.Vector3().setFromMatrixPosition(view.matrixWorld);
+  phoneAboveFloor = phone.y - floorY;
+  field.event('run start', {
+    mode: mode?.kind,
+    floorY: r3(floorY),
+    phone: phone.toArray().map(r3),
+    // Standing upright this is ~1.3-1.5 m; much less means the floor was found too high.
+    phoneAboveFloor: r3(phone.y - floorY),
+    rebased: map.rebased,
+    walkableStep: map.walkableStep,
+    pathLength: r3(points.length),
+    // Enough to rebuild the run when replaying it: the route laid, where it was seeded, laps.
+    points: resample(points, 0.25).map(p => [r3(p.x), r3(p.z)]),
+    seeds: seeds.map(s => [r3(s.x), r3(s.z)]),
+    laps,
+    turnarounds: partner.turnarounds,
+  });
   for (const seed of seeds) map.seedGround(seed.x, floorY, seed.z, 1);
   path.setRoute(points, floorY);
   path.group.visible = true;
@@ -770,7 +804,10 @@ function beforeRun(dt: number, seconds: number, now: number, sensorTick: boolean
         if (sim.world) {
           sim.world.sampleDepth(camera, map, now);
           sim.world.sampleGround(camera, map);
-        } else if (frame && referenceSpace && depthEnabled) depthPoints = depthSensor.sample(frame, referenceSpace, map, now);
+        } else if (frame && referenceSpace && depthEnabled) {
+          depthPoints = depthSensor.sample(frame, referenceSpace, map, now);
+          field.frame(now, { pose: depthSensor.pose, projection: depthSensor.projection, grid: depthSensor.grid, hits: groundRays.recent });
+        }
       }
       if (sim.walk && sim.walk.s >= sim.walkLengths.at(-1)!) {
         finishRecording();
@@ -1092,7 +1129,60 @@ function diagnosticRows(runnerS: number, trackingLost: boolean): [string, string
       ['off path', `${Math.hypot(onPath.x - runner.x, onPath.z - runner.z).toFixed(1)} m at ${runnerS.toFixed(0)} m`],
     );
   }
+  if (field.enabled) {
+    const cells = map.hazardCells(runner.x, runner.z, 6, performance.now() / 1000, []);
+    rows.push(
+      ['phone', `${phoneAboveFloor === null ? '?' : phoneAboveFloor.toFixed(2)} m over tapped floor (~1.4 ok)`],
+      ...(field.last ? summaryRows(field.last) : []),
+      ['re-based', `${map.rebased} cells moved to floor hits`],
+      ['distrust', `${map.distrustedFrames} depth frames ignored for drops`],
+      ['frames', `${depthSensor.frames} depth, ${depthSensor.unchanged} unchanged`],
+      ['hazards', `${cells.filter(c => c.kind === 'obstacle').length} obstacle, ${cells.filter(c => c.kind === 'drop').length} drop cells (6 m)`],
+      ['blocked', path.status.blockedAtS === null ? 'no' : `${path.status.blockReason} at +${(path.status.blockedAtS - runnerS).toFixed(1)} m`],
+      ['log', `${field.session} · ${field.sent} sent${field.failed ? ` · ${field.failed} failed` : ''}`],
+      ['recorded', `${field.frames} raw frames · ${field.marks} marks`],
+    );
+  }
   return rows;
+}
+
+const r3 = (n: number) => Math.round(n * 1000) / 1000;
+
+/** One field-test snapshot: where the phone is, what the path and map think, and why. */
+function fieldSnapshot(now: number, runnerS: number, trackingLost: boolean): Record<string, unknown> {
+  const view = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const position = new THREE.Vector3().setFromMatrixPosition(view.matrixWorld);
+  const forward = new THREE.Vector3(0, 0, -1).transformDirection(view.matrixWorld);
+  const along = (offset: number) => {
+    const p = path.pointAt(runnerS + offset, new THREE.Vector3());
+    const ground = map.groundAt(p.x, p.z);
+    const ref = map.referenceGround(p.x, p.z);
+    return { d: offset, x: r3(p.x), z: r3(p.z), pathY: r3(p.y), ground: ground === null ? null : r3(ground), ref: ref === null ? null : r3(ref) };
+  };
+  const cells = map.hazardCells(runner.x, runner.z, 6, now, []);
+  return {
+    mode: mode?.kind,
+    tracking: trackingLost ? 'lost' : 'ok',
+    camera: position.toArray().map(r3),
+    heading: r3(Math.atan2(forward.x, -forward.z)),
+    pitch: r3(Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1))),
+    runnerS: r3(runnerS),
+    buddyS: r3(partner.s),
+    state: partner.state,
+    path: { length: r3(path.length), blockedAtS: path.status.blockedAtS, reason: path.status.blockReason, detouring: path.status.detouring, seenUntilS: r3(path.status.seenUntilS) },
+    ahead: [0, 1, 2, 3, 4, 6].map(along),
+    hazards: cells.slice(0, 40).map(c => [r3(c.x), r3(c.z), r3(c.y), c.kind === 'drop' ? 'D' : 'O']),
+    hazardCounts: { obstacle: cells.filter(c => c.kind === 'obstacle').length, drop: cells.filter(c => c.kind === 'drop').length },
+    depthPoints,
+    depthFrames: depthSensor.frames,
+    depthUnchanged: depthSensor.unchanged,
+    distrustedFrames: map.distrustedFrames,
+    rayHits,
+    walkableStep: map.walkableStep,
+    mapCells: map.size,
+    rebased: map.rebased,
+    gps: gps.latest ? { accuracy: gps.latest.accuracy } : null,
+  };
 }
 
 const clock = new THREE.Clock();
@@ -1141,7 +1231,10 @@ renderer.setAnimationLoop((time, frame) => {
     } else {
       runner.setFromMatrixPosition(renderer.xr.getCamera().matrixWorld);
       runnerS = path.project(runner);
-      if (sensorTick && frame && referenceSpace && depthEnabled) depthPoints = depthSensor.sample(frame, referenceSpace, map, now);
+      if (sensorTick && frame && referenceSpace && depthEnabled) {
+        depthPoints = depthSensor.sample(frame, referenceSpace, map, now);
+        field.frame(now, { pose: depthSensor.pose, projection: depthSensor.projection, grid: depthSensor.grid, hits: groundRays.recent });
+      }
     }
 
     // On an out-and-back, show the way back only once you're nearly at the turn.
@@ -1210,6 +1303,8 @@ renderer.setAnimationLoop((time, frame) => {
     if (hud.breakButton.textContent !== breakLabel) hud.breakButton.textContent = breakLabel;
     bubble.update(point, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera, now);
     if (diagnostics.due(now)) diagnostics.show(diagnosticRows(runnerS, trackingLost));
+    field.tick(now, () => fieldSnapshot(now, runnerS, trackingLost));
+    if (markButton.hidden === field.enabled) markButton.hidden = !field.enabled;
   }
 
   // Nothing 3D to show on the home, planner or summary screens.
