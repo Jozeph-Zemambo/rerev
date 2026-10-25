@@ -90,9 +90,10 @@ export const LOOP_TOLERANCE = 0.1;
 export const LOOP_MAX_TRIES = 4;
 /** When resizing can't hit the distance, turn the loop this much (degrees) to find other streets. */
 const LOOP_TURNS = [0, 25, -25];
-/** Resizing barely changed the route (below) or changed it far more than the resize (above). */
+/** Resizing barely changed the route: the triangle keeps snapping to the same streets. */
 const LOOP_FLAT = 0.2;
-const LOOP_JUMP = 1.8;
+/** Tries this close in size (fraction) but either side of the target: the streets jump between them. */
+const LOOP_JUMP_GAP = 0.1;
 
 /** A loop's shape: its size relative to the first guess, and its turn off the chosen bearing. */
 export type LoopShape = { stretch: number; turn: number };
@@ -126,7 +127,8 @@ export function nextLoopShape(tries: LoopTry[], target: number): LoopShape | nul
   if (p && q && p.stretch !== q.stretch) {
     // How many percent the route changed per percent of resize: about 1 on a regular street grid.
     const elasticity = (q.distance - p.distance) / (q.distance + p.distance) / ((q.stretch - p.stretch) / (q.stretch + p.stretch));
-    if (elasticity < LOOP_FLAT || elasticity > LOOP_JUMP) stuck = true;
+    // Either side of the target, narrow in until the gap is too small to hold a route between.
+    if (bracketed ? q.stretch - p.stretch < LOOP_JUMP_GAP * p.stretch : elasticity < LOOP_FLAT) stuck = true;
     else {
       const secant = p.stretch + ((target - p.distance) * (q.stretch - p.stretch)) / (q.distance - p.distance);
       // Off the end of the line, go no more than twice as far as a plain rescale would.
