@@ -562,6 +562,7 @@ class Replayer {
     this.partner.reset(0);
     this.partner.effort = 1;
     this.partner.trustGroundAhead = mode === 'route';
+    this.partner.pacing = mode === 'route' ? 'goal' : 'match';
     this.camera.fromArray(data.phone);
     this.previousCamera.copy(this.camera);
     this.runnerS = 0;
