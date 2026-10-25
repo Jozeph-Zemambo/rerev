@@ -119,6 +119,19 @@ test('the floor detection can move the ground up a kerb, but a table top never b
   assert.ok(Math.abs(map.groundAt(0.6, 0) ?? 0) < 0.01, 'a table must not become ground');
 });
 
+test('known ground re-based by the same amount in several places moves the whole map', () => {
+  // Field test: the phone's world crept up 12 cm through a second floor plane, cell by cell.
+  const map = new SurfaceMap();
+  map.seedGround(0, 0, 0, 2);
+  let now = 0;
+  for (const [x, z] of [[0, -1], [0.6, -1.2], [-0.6, -1.4]]) {
+    for (let i = 0; i < 3; i++, now += 0.05) map.addFloorHits([{ x, y: 0.12, z }], now);
+  }
+  const far = map.groundAt(1.2, 1.2);
+  assert.ok(far !== null && Math.abs(far - 0.12) < 0.01, `untouched ground should follow, got ${far}`);
+  assert.ok(Math.abs((map.groundAt(0, -1) ?? 0) - 0.12) < 0.01, 're-based cells stay where the floor is');
+});
+
 /**
  * Field-measured depth error on a flat hallway floor while walking, by distance, as percentiles
  * (fraction of points, error in metres). Measured: 5%, 50% and 95% per distance band, and that
