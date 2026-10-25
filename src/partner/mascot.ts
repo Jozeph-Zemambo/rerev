@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Bean, BEAN_HEIGHT } from './bean';
 import type { BuddyColor } from './buddies';
-import { buddyMotion, type Gait } from './buddyMotion';
+import { buddyMotion, type BuddyMotion, type Gait } from './buddyMotion';
 import { BuddyPacer } from './buddyPace';
 
 export type { Gait } from './buddyMotion';
@@ -70,6 +70,8 @@ export class Mascot {
   private motionKey = '';
   private flourishClock = 0;
   private running = false;
+  /** Set before the model loads to have it cast real shadows (the laptop booth screen; AR uses a blob). */
+  castShadows = false;
 
   constructor(color: BuddyColor) {
     this.bean.root.scale.setScalar(BUDDY_HEIGHT / BEAN_HEIGHT);
@@ -101,8 +103,31 @@ export class Mascot {
     this.lean += (hill - this.lean) * Math.min(1, dt * 4);
     this.holder.rotation.x = this.lean;
 
-    const pacer = this.buddy.pacer;
-    const motion = buddyMotion(gait, this.running, BUDDY_HEIGHT);
+    this.animate(dt, buddyMotion(gait, this.running, BUDDY_HEIGHT));
+  }
+
+  /** Play a set motion instead of one picked from a gait (the booth's Idle and Wave). */
+  perform(dt: number, timeSeconds: number, motion: BuddyMotion) {
+    if (!this.buddy) {
+      this.bean.update(dt, timeSeconds, { speed: 0, inPlace: false, grade: 0, idle: true });
+      return;
+    }
+    this.lean += -this.lean * Math.min(1, dt * 4);
+    this.holder.rotation.x = this.lean;
+    this.animate(dt, motion);
+  }
+
+  /** Free the model, its animations and the bean. The Mascot can't be used after this. */
+  dispose() {
+    this.loads++;
+    this.buddy?.pacer.dispose();
+    this.buddy = null;
+    this.root.removeFromParent();
+    dispose(this.root);
+  }
+
+  private animate(dt: number, motion: BuddyMotion) {
+    const pacer = this.buddy!.pacer;
     this.running = motion.kind === 'pace';
     if (motion.kind === 'pace') {
       pacer.run(motion.speed);
@@ -136,6 +161,7 @@ export class Mascot {
     // Only ever sized through the pacer, so its pace maths knows the height and the feet don't slide.
     this.buddy = { model, pacer: new BuddyPacer(model, animations, { height: BUDDY_HEIGHT }) };
     this.holder.add(model);
+    if (this.castShadows) model.traverse(o => (o.castShadow = true));
     this.bean.root.visible = false;
     this.motionKey = '';
     this.running = false;

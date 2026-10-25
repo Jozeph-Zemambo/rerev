@@ -1,5 +1,6 @@
 import { pacePlan, type BuddyClip } from './buddyPace';
 import type { PartnerState } from './partner';
+import type { BuddyColor } from './buddies';
 
 export type Gait = {
   /** Forward speed in metres per second. */
@@ -27,6 +28,16 @@ const IDLE: BuddyMotion = { kind: 'loop', clip: 'Idle', flourish: { clip: 'Wave'
 const WAIT: BuddyMotion = { kind: 'loop', clip: 'JogInPlace', flourish: { clip: 'Beckon', repeats: 1, every: 6 } };
 const JOG_IN_PLACE: BuddyMotion = { kind: 'loop', clip: 'JogInPlace' };
 const DONE: BuddyMotion = { kind: 'loop', clip: 'Wave' };
+
+/**
+ * At the demo table, on the laptop screen and in AR alike: Rev stands idling; Vita waves (five
+ * flaps, 3 s) with a breath of idle (1.5 s) between, so she's waving nearly all the time but
+ * doesn't look stuck on a loop.
+ */
+export const BOOTH_MOTION: Record<BuddyColor, BuddyMotion> = {
+  blue: { kind: 'loop', clip: 'Idle' },
+  pink: { kind: 'loop', clip: 'Idle', flourish: { clip: 'Wave', repeats: 5, every: 4.5 } },
+};
 
 /**
  * Slowest leg speed (fraction of the jog clip's own) it jogs along at. Below the pacer's usual
