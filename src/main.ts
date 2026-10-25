@@ -512,7 +512,6 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   hud.showScore(0, 0);
   partner.reset(runnerS);
   partner.effort = 1;
-  partner.trustGroundAhead = !!routeRun;
   partner.pacing = routeRun ? 'goal' : 'match';
   runStartedAt = performance.now() / 1000;
   coach.reset(runStartedAt);

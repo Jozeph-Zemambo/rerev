@@ -13,7 +13,15 @@ const MIN_PACE = 0.6;
 const MAX_PACE = 4;
 /** Stops this far short of a blocked stretch. */
 const STOP_SHORT = 1.2;
-/** Never runs closer than this to ground the camera has not seen yet. */
+/**
+ * Unseen ground doesn't hold the buddy back: phone depth while walking only marks floor a metre
+ * or so ahead, and holding to it made the buddy stall and lurch every few seconds. Hazards still
+ * stop or steer it once they're confirmed. Only when the camera has seen no ground ahead
+ * of the runner (BLIND_AHEAD) for BLIND_AFTER seconds (pointing at the sky, or at their feet)
+ * does it hold to what has been seen, SEEN_MARGIN short of the end of it, and ask to look ahead.
+ */
+const BLIND_AHEAD = 0.5;
+const BLIND_AFTER = 3;
 const SEEN_MARGIN = 0.5;
 /** Waits for a runner who's this far beyond maxLead behind, even if they're still moving. */
 const FAR_BEHIND = 1.5;
@@ -47,11 +55,6 @@ export class Partner {
   maxLead = 4.5;
   /** 'goal' paces a planned route at goalPace; 'match' (Quick start, courses) goes the runner's speed. */
   pacing: PacingMode = 'match';
-  /**
-   * Outdoors on a planned route the ground just ahead of you is the pavement you're on, so the
-   * buddy may keep its usual lead even before the camera has seen it. Indoors it stays strict.
-   */
-  trustGroundAhead = false;
   /** The runner's speed along the path, smoothed. */
   readonly runner = new RunnerSpeed();
   /**
@@ -61,6 +64,8 @@ export class Partner {
   turnarounds: number[] = [];
 
   private speed = 0;
+  /** How long the camera has seen no ground ahead of the runner. */
+  private blindFor = 0;
   private onBreak = false;
   /** Index of the next turnaround still ahead, and how long is left of the pause at it. */
   private nextTurn = 0;
@@ -89,6 +94,7 @@ export class Partner {
     this.s = runnerS + START_LEAD;
     this.state = 'run';
     this.speed = 0;
+    this.blindFor = 0;
     this.runner.reset(runnerS);
     this.onBreak = false;
     this.turnPause = 0;
@@ -136,8 +142,10 @@ export class Partner {
     }
     const turning = atTurn && !this.onBreak;
     const blockedAt = this.path.status.blockedAtS;
-    const seen = this.path.status.seenUntilS - SEEN_MARGIN;
-    const seenLimit = this.trustGroundAhead ? Math.max(seen, runnerS + this.maxLead + 0.5) : seen;
+    const seenUntil = this.path.status.seenUntilS;
+    this.blindFor = seenUntil - runnerS < BLIND_AHEAD ? this.blindFor + dt : 0;
+    const blind = this.blindFor >= BLIND_AFTER;
+    const seenLimit = blind ? seenUntil - SEEN_MARGIN : Infinity;
     const lead = this.s - runnerS;
     // Waiting for a runner who's stopped carries on until they move again; for one far behind,
     // until they're back within maxLead.
