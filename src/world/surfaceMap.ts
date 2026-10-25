@@ -502,7 +502,9 @@ export class SurfaceMap {
       onFloorHits.sort((a, b) => a - b);
       hitRanges.sort((a, b) => a - b);
       shift = onFloorHits[onFloorHits.length >> 1];
-      shiftTo = hitRanges[Math.floor(hitRanges.length * 0.9)] + t.correctBeyond;
+      // Only a frame sitting low is moved: one reading high there may be something standing on
+      // the floor detections (the foot of a wall or a box), and lowering it would hide that.
+      if (shift < 0) shiftTo = hitRanges[Math.floor(hitRanges.length * 0.9)] + t.correctBeyond;
       quality = Math.min(1, Math.max(0, (t.shiftBad - Math.abs(shift)) / (t.shiftBad - t.shiftOk)));
     }
     this.lastFrameQuality = quality;
