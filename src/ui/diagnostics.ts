@@ -1,5 +1,3 @@
-import { FIELD_TEST } from '../debug/fieldLog';
-
 const LONG_PRESS = 0.7;
 const REDRAW_EVERY = 0.25;
 
@@ -10,7 +8,7 @@ const REDRAW_EVERY = 0.25;
  */
 export class Diagnostics {
   private readonly el = document.getElementById('diag')!;
-  private visible = new URLSearchParams(location.search).has('debug') || FIELD_TEST;
+  private visible = new URLSearchParams(location.search).has('debug');
   private lastDraw = 0;
   private frames = 0;
   private fpsFrom = 0;
