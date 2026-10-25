@@ -160,6 +160,13 @@ const diagnostics = new Diagnostics(byId('lead-stat'));
 /** Field-test recording (`?field`): raw sensor and surface-map data, uploaded to Convex. */
 const field = new FieldLog(convex);
 if (field.enabled) map.probe = field;
+// Field testing: tap whenever something looks wrong, so the moment is easy to find later.
+const markButton = byId<HTMLButtonElement>('field-mark');
+markButton.onclick = () => {
+  field.mark({ state: partner.state, buddyS: partner.s, blockedAtS: path.status.blockedAtS, reason: path.status.blockReason });
+  markButton.textContent = `Marked ${field.marks}`;
+  window.setTimeout(() => (markButton.textContent = 'Mark'), 1200);
+};
 let depthPoints = 0;
 /** How high the phone was above the floor it found when the run started (field testing). */
 let phoneAboveFloor: number | null = null;
@@ -446,6 +453,7 @@ function clearRunScene() {
 }
 
 function endRun() {
+  markButton.hidden = true;
   field.event('run end', { distance: recorder.distanceSoFar });
   field.upload();
   const summary = placed ? recorder.finish(performance.now() / 1000) : null;
@@ -492,6 +500,11 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
     rebased: map.rebased,
     walkableStep: map.walkableStep,
     pathLength: r3(points.length),
+    // Enough to rebuild the run when replaying it: the route laid, where it was seeded, laps.
+    points: resample(points, 0.25).map(p => [r3(p.x), r3(p.z)]),
+    seeds: seeds.map(s => [r3(s.x), r3(s.z)]),
+    laps,
+    turnarounds: partner.turnarounds,
   });
   for (const seed of seeds) map.seedGround(seed.x, floorY, seed.z, 1);
   path.setRoute(points, floorY);
@@ -791,7 +804,10 @@ function beforeRun(dt: number, seconds: number, now: number, sensorTick: boolean
         if (sim.world) {
           sim.world.sampleDepth(camera, map, now);
           sim.world.sampleGround(camera, map);
-        } else if (frame && referenceSpace && depthEnabled) depthPoints = depthSensor.sample(frame, referenceSpace, map, now);
+        } else if (frame && referenceSpace && depthEnabled) {
+          depthPoints = depthSensor.sample(frame, referenceSpace, map, now);
+          field.frame(now, { pose: depthSensor.pose, projection: depthSensor.projection, grid: depthSensor.grid, hits: groundRays.recent });
+        }
       }
       if (sim.walk && sim.walk.s >= sim.walkLengths.at(-1)!) {
         finishRecording();
@@ -1124,6 +1140,7 @@ function diagnosticRows(runnerS: number, trackingLost: boolean): [string, string
       ['hazards', `${cells.filter(c => c.kind === 'obstacle').length} obstacle, ${cells.filter(c => c.kind === 'drop').length} drop cells (6 m)`],
       ['blocked', path.status.blockedAtS === null ? 'no' : `${path.status.blockReason} at +${(path.status.blockedAtS - runnerS).toFixed(1)} m`],
       ['log', `${field.session} · ${field.sent} sent${field.failed ? ` · ${field.failed} failed` : ''}`],
+      ['recorded', `${field.frames} raw frames · ${field.marks} marks`],
     );
   }
   return rows;
@@ -1214,7 +1231,10 @@ renderer.setAnimationLoop((time, frame) => {
     } else {
       runner.setFromMatrixPosition(renderer.xr.getCamera().matrixWorld);
       runnerS = path.project(runner);
-      if (sensorTick && frame && referenceSpace && depthEnabled) depthPoints = depthSensor.sample(frame, referenceSpace, map, now);
+      if (sensorTick && frame && referenceSpace && depthEnabled) {
+        depthPoints = depthSensor.sample(frame, referenceSpace, map, now);
+        field.frame(now, { pose: depthSensor.pose, projection: depthSensor.projection, grid: depthSensor.grid, hits: groundRays.recent });
+      }
     }
 
     // On an out-and-back, show the way back only once you're nearly at the turn.
@@ -1284,6 +1304,7 @@ renderer.setAnimationLoop((time, frame) => {
     bubble.update(point, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera, now);
     if (diagnostics.due(now)) diagnostics.show(diagnosticRows(runnerS, trackingLost));
     field.tick(now, () => fieldSnapshot(now, runnerS, trackingLost));
+    if (markButton.hidden === field.enabled) markButton.hidden = !field.enabled;
   }
 
   // Nothing 3D to show on the home, planner or summary screens.

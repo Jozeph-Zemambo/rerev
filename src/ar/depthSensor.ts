@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import type { SurfaceMap } from '../world/surfaceMap';
 
-const COLS = 32;
-const ROWS = 24;
+export const COLS = 32;
+export const ROWS = 24;
 /** Ignore the top quarter of the view (sky, ceilings, far walls) and readings outside this range. */
-const TOP = 0.25;
+export const TOP = 0.25;
 const MIN_DEPTH = 0.25;
 const MAX_DEPTH = 5;
 
@@ -33,6 +33,13 @@ export class DepthSensor {
   /** Field testing: frames read, and how many came back identical to the one before (stale). */
   frames = 0;
   unchanged = 0;
+  /**
+   * The last frame's raw readings, for field-test recording: depth per grid cell in millimetres
+   * (0 = no reading), and the view's pose and projection matrices.
+   */
+  readonly grid = new Uint16Array(COLS * ROWS);
+  pose: number[] = [];
+  projection: number[] = [];
   private lastProbe = '';
 
   /** Returns how many usable points were read this frame (0 if the phone gave no depth). */
@@ -44,6 +51,9 @@ export class DepthSensor {
     this.inverseProjection.fromArray(view.projectionMatrix).invert();
     this.viewToWorld.fromArray(view.transform.matrix);
     this.samples.length = 0;
+    this.grid.fill(0);
+    this.pose = Array.from(view.transform.matrix);
+    this.projection = Array.from(view.projectionMatrix);
 
     for (let row = 0; row < ROWS; row++) {
       const v = TOP + ((1 - TOP) * (row + 0.5)) / ROWS;
@@ -56,6 +66,7 @@ export class DepthSensor {
           continue;
         }
         if (!(d >= MIN_DEPTH && d <= MAX_DEPTH)) continue;
+        this.grid[row * COLS + col] = Math.round(d * 1000);
         // A point on the near plane in view space, scaled so its forward distance equals d.
         this.point.set(u * 2 - 1, 1 - v * 2, -1).applyMatrix4(this.inverseProjection);
         this.point.multiplyScalar(d / -this.point.z).applyMatrix4(this.viewToWorld);

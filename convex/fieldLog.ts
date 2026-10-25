@@ -12,7 +12,7 @@ export const add = mutation({
   },
   returns: v.null(),
   handler: async (ctx, { session, entries }) => {
-    for (const entry of entries.slice(0, 200)) await ctx.db.insert('fieldLogs', { session, ...entry });
+    for (const entry of entries.slice(0, 400)) await ctx.db.insert('fieldLogs', { session, ...entry });
     return null;
   },
 });

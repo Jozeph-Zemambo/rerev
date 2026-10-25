@@ -2,8 +2,9 @@ import type { ConvexClient } from 'convex/browser';
 import { api } from '../../convex/_generated/api';
 import type { DepthVerdict, SurfaceProbe } from '../world/surfaceMap';
 
-/** Snapshots twice a second; uploads every few seconds. */
+/** Snapshots twice a second, raw sensor frames five times a second; uploads every few seconds. */
 const TICK_EVERY = 0.5;
+const FRAME_EVERY = 0.2;
 const UPLOAD_EVERY = 5;
 /** Depth heights (relative to the known ground) are binned in 2 cm steps over ±40 cm. */
 const BIN = 0.02;
@@ -38,6 +39,10 @@ export class FieldLog implements SurfaceProbe {
   private pending: Entry[] = [];
   private startedAt = performance.now() / 1000;
   private lastTick = 0;
+  private lastFrame = 0;
+  private lastProjection = '';
+  frames = 0;
+  marks = 0;
   private lastUpload = 0;
   private bands: Band[] = [];
   private groundStats = { accepted: 0, rejected: 0, unknown: 0, hist: [] as number[] };
@@ -67,6 +72,38 @@ export class FieldLog implements SurfaceProbe {
       if (accepted) this.groundStats.accepted++;
       else this.groundStats.rejected++;
     }
+  }
+
+  /**
+   * Raw sensor readings for replaying a walk on the laptop: the view's pose (and projection when
+   * it changes), the depth grid in millimetres, and the floor hits since the last frame.
+   */
+  frame(now: number, raw: { pose: number[]; projection: number[]; grid: Uint16Array; hits: number[][] }) {
+    if (!this.enabled || now - this.lastFrame < FRAME_EVERY || raw.pose.length === 0) return;
+    this.lastFrame = now;
+    const projection = raw.projection.map(n => +n.toFixed(6)).join(',');
+    const bytes = new Uint8Array(raw.grid.buffer, raw.grid.byteOffset, raw.grid.byteLength);
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    this.pending.push({
+      t: this.clock(),
+      kind: 'frame',
+      data: {
+        pose: raw.pose.map(n => +n.toFixed(5)),
+        ...(projection !== this.lastProjection ? { projection: raw.projection.map(n => +n.toFixed(6)) } : {}),
+        depth: btoa(binary),
+        hits: raw.hits.splice(0).map(hit => hit.map(n => +n.toFixed(4))),
+      },
+    });
+    this.lastProjection = projection;
+    this.frames++;
+  }
+
+  /** The runner tapped Mark: something worth looking at happened here. */
+  mark(details: Record<string, unknown>) {
+    if (!this.enabled) return;
+    this.marks++;
+    this.event('mark', { n: this.marks, ...details });
   }
 
   /** A one-off event, e.g. where and how a run was placed. */
