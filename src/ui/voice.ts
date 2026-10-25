@@ -16,7 +16,7 @@ export interface Voice {
  * recorded clip yet.
  */
 class BrowserSpeech {
-  /** Voice pitch (1 = normal). Each buddy gets its own, so blue and pink don't sound identical. */
+  /** Voice pitch (1 = normal). Each buddy gets its own, so Rev and Vita don't sound identical. */
   pitch = 1.2;
 
   readonly available = 'speechSynthesis' in window;

@@ -1,19 +1,18 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Bean, BEAN_HEIGHT } from './bean';
+import type { BuddyColor } from './buddies';
 import { buddyMotion, type Gait } from './buddyMotion';
 import { BuddyPacer } from './buddyPace';
 
 export type { Gait } from './buddyMotion';
+export { BUDDY_COLORS, type BuddyColor } from './buddies';
 
 /**
  * The buddy's height in metres: the one setting for its size. The model is scaled to it (and
  * its pace maths told) through the pacer; the bubble and blob shadow follow it too.
  */
 export const BUDDY_HEIGHT = 1.3;
-
-export type BuddyColor = 'blue' | 'pink';
-export const BUDDY_COLORS: BuddyColor[] = ['blue', 'pink'];
 
 const MODELS: Record<BuddyColor, { file: string; bean: number }> = {
   blue: { file: 'buddy.glb', bean: 0x6ec3ea },

@@ -51,6 +51,13 @@ export class Hud {
     this.root.hidden = !visible;
   }
 
+  private readonly leadName = byId('lead-name');
+
+  /** The lead stat is labelled with the buddy you're running with ("Rev · 3.2 m ahead"). */
+  setBuddyName(name: string) {
+    this.leadName.textContent = name;
+  }
+
   private readonly score = byId('score');
   private readonly scoreStars = byId('score-stars');
   private readonly scoreCoins = byId('score-coins');

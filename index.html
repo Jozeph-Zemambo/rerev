@@ -18,8 +18,8 @@
         <p class="tagline">Revitalise your run. Buddy paces you, reads your heart, and finds the way around whatever's in it.</p>
         <div id="buddy-pick" class="buddy-pick" role="radiogroup" aria-label="Pick your buddy">
           <span class="buddy-pick-label">Run with</span>
-          <button type="button" role="radio" data-buddy="blue" aria-checked="true"><span class="mini-bean" aria-hidden="true"></span>Blue</button>
-          <button type="button" role="radio" data-buddy="pink" aria-checked="false"><span class="mini-bean" aria-hidden="true"></span>Pink</button>
+          <button type="button" role="radio" data-buddy="blue" aria-checked="true"><span class="mini-bean" aria-hidden="true"></span>Rev</button>
+          <button type="button" role="radio" data-buddy="pink" aria-checked="false"><span class="mini-bean" aria-hidden="true"></span>Vita</button>
         </div>
         <button id="watch-connect" class="watch-pill" type="button" hidden><span class="watch-dot"></span><span id="watch-status">Connect your watch</span></button>
         <button id="go-plan" class="card-button" type="button">
@@ -43,7 +43,7 @@
 
     <section id="summary" class="screen" hidden>
       <div class="home-inner">
-        <p class="eyebrow">Run complete</p>
+        <p id="summary-eyebrow" class="eyebrow">Run complete</p>
         <h1 id="summary-title" class="summary-title">Nice run!</h1>
         <div id="sum-zone" class="zone-card" hidden>
           <p class="zone-hero"><b id="sum-zone-pct">–</b><span>of the run in your heart zone <small id="sum-zone-range"></small></span></p>
@@ -114,7 +114,7 @@
       <div id="topbar">
         <button id="hr-stat" class="stat" type="button" aria-label="Heart rate. Tap for a demo override."><span class="k">Heart</span><span id="hr" class="v">--</span><span id="hr-source" class="u">bpm</span></button>
         <div class="stat"><span class="k">Pace</span><span id="pace-live" class="v">--</span><span class="u">min/km</span></div>
-        <button id="lead-stat" class="stat" type="button" aria-label="Buddy distance ahead. Long press for diagnostics."><span class="k">Buddy</span><span id="lead" class="v">--</span><span class="u">m ahead</span></button>
+        <button id="lead-stat" class="stat" type="button" aria-label="Buddy distance ahead. Long press for diagnostics."><span id="lead-name" class="k">Buddy</span><span id="lead" class="v">--</span><span class="u">m ahead</span></button>
       </div>
       <div id="hr-panel" hidden>
         <label for="hr-manual">Demo heart rate <output id="hr-manual-out" for="hr-manual">140</output> bpm</label>

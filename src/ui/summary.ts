@@ -19,6 +19,8 @@ export function formatDuration(seconds: number) {
 /** The end-of-run card: a full screen after AR, or a sheet over the camera view inside AR. */
 export class SummaryScreen {
   onDone: () => void = () => {};
+  /** Who you ran with, for the card's eyebrow ("Run complete with Rev"). */
+  buddyName = '';
   private readonly screen = byId('summary');
   private readonly home = this.screen.parentElement!;
 
@@ -35,6 +37,7 @@ export class SummaryScreen {
    */
   show(summary: RunSummary, trace: readonly TracePoint[] = [], zone?: Zone, overlay?: HTMLElement) {
     const set = (id: string, text: string) => (byId(id).textContent = text);
+    set('summary-eyebrow', this.buddyName ? `Run complete with ${this.buddyName}` : 'Run complete');
     set('summary-title', summary.distance < 30 ? 'Good warm-up!' : summary.breaks === 0 ? 'Nonstop. Nice!' : 'Nice run!');
     set('sum-distance', formatDistance(summary.distance));
     set('sum-time', formatDuration(summary.duration));

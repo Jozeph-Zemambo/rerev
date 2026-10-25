@@ -10,6 +10,7 @@ import { BluetoothHeartRate, type BluetoothState } from './heart/bluetoothHeartR
 import { HeartRateFeed } from './heart/heartRateFeed';
 import { formatPace, Hud } from './hud';
 import { Coach } from './partner/coach';
+import { BUDDY_NAMES, BUDDY_PITCH, type BuddyColor } from './partner/buddies';
 import { Mascot } from './partner/mascot';
 import { Partner, type PartnerState } from './partner/partner';
 import { RouteCallouts } from './run/callouts';
@@ -154,12 +155,16 @@ scene.add(path.group);
 const markers = new HazardMarkers();
 scene.add(markers.mesh);
 const mascot = new Mascot(savedBuddy());
-/** The pink buddy speaks a little higher than the blue one, with the same phone voice. */
-const BUDDY_PITCH = { blue: 1.15, pink: 1.45 } as const;
-voice.pitch = BUDDY_PITCH[savedBuddy()];
+/** Rev or Vita: their voice, and their name on the run HUD and summary. */
+function useBuddy(color: BuddyColor) {
+  voice.pitch = BUDDY_PITCH[color];
+  hud.setBuddyName(BUDDY_NAMES[color]);
+  summaryScreen.buddyName = BUDDY_NAMES[color];
+}
+useBuddy(savedBuddy());
 setupBuddyPicker(byId('buddy-pick'), savedBuddy(), color => {
   mascot.setColor(color);
-  voice.pitch = BUDDY_PITCH[color];
+  useBuddy(color);
 });
 mascot.root.visible = false;
 scene.add(mascot.root);
