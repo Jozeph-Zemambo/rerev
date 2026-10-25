@@ -30,6 +30,11 @@ const DETOURS = [0.6, 0.9, 1.2];
 /** Margin kept clear before and after an obstacle, and length of the ramp into a detour. */
 const CLEARANCE = 0.4;
 const RAMP = 1.0;
+/**
+ * When the route ahead is re-laid (follow-me), the drawn line glides from where it was to its
+ * new place instead of jumping: what is left of the move shrinks by this rate per second.
+ */
+const MORPH_RATE = 5;
 
 const UP = new THREE.Vector3(0, 1, 0);
 const DASH_BASE = new THREE.Color(0xffb347);
@@ -76,6 +81,12 @@ export class Path {
   private yTarget = new Float32Array(0);
   private offset = new Float32Array(0);
   private offsetTarget = new Float32Array(0);
+  /** What is left of a re-lay's move per sample (drawn position minus the route's), easing to 0. */
+  private mx = new Float32Array(0);
+  private mz = new Float32Array(0);
+  private morphing = false;
+  /** First sample that may still be gliding. */
+  private morphFrom = 0;
   private lastProjected = 0;
   /** Where direction of travel was last measured from, and that direction (unit, or zero if unknown). */
   private readonly travelFrom = new THREE.Vector3(NaN, 0, NaN);
@@ -119,22 +130,14 @@ export class Path {
     this.yTarget = new Float32Array(this.count).fill(baseY);
     this.offset = new Float32Array(this.count);
     this.offsetTarget = new Float32Array(this.count);
+    this.mx = new Float32Array(this.count);
+    this.mz = new Float32Array(this.count);
+    this.morphing = false;
     resampled.forEach((p, i) => {
       this.xs[i] = p.x;
       this.zs[i] = p.z;
     });
-    // Sideways vectors from a smoothed tangent so sharp corners do not flip detours.
-    for (let i = 0; i < this.count; i++) {
-      const a = Math.max(0, i - 5);
-      const b = Math.min(this.count - 1, i + 5);
-      let tx = this.xs[b] - this.xs[a];
-      let tz = this.zs[b] - this.zs[a];
-      const len = Math.hypot(tx, tz) || 1;
-      tx /= len;
-      tz /= len;
-      this.nx[i] = tz;
-      this.nz[i] = -tx;
-    }
+    this.computeSideways(0);
     this.status.blockedAtS = null;
     this.status.blockReason = null;
     this.status.detouring = false;
@@ -145,6 +148,111 @@ export class Path {
       this.travelFrom.set(NaN, 0, NaN);
       this.travel.set(0, 0);
     }
+  }
+
+  /** Sideways vectors from a smoothed tangent (so sharp corners do not flip detours), from sample `from` on. */
+  private computeSideways(from: number) {
+    for (let i = Math.max(0, from); i < this.count; i++) {
+      const a = Math.max(0, i - 5);
+      const b = Math.min(this.count - 1, i + 5);
+      let tx = this.xs[b] - this.xs[a];
+      let tz = this.zs[b] - this.zs[a];
+      const len = Math.hypot(tx, tz) || 1;
+      tx /= len;
+      tz /= len;
+      this.nx[i] = tz;
+      this.nz[i] = -tx;
+    }
+  }
+
+  /**
+   * Follow-me: keep the route up to `s` exactly as it is (so the buddy and everything behind it
+   * stay put, and distances along it still hold) and replace what lies beyond with `ahead`,
+   * joined on from the route's point at `s`. Ground heights carry over and detours beyond `s`
+   * are re-planned on the next hazard check. The drawn line glides to its new place.
+   */
+  relayFrom(s: number, ahead: RoutePoint[]) {
+    if (!this.ready || ahead.length === 0) return;
+    const keep = THREE.MathUtils.clamp(Math.round(s / STEP), 0, this.count - 1);
+    const anchor = { x: this.xs[keep], z: this.zs[keep] };
+    const tail = resample([anchor, ...ahead], STEP).slice(1);
+    if (tail.length === 0) return;
+    const old = { count: this.count, xs: this.xs, zs: this.zs, nx: this.nx, nz: this.nz, ys: this.ys, yTarget: this.yTarget, offset: this.offset, offsetTarget: this.offsetTarget, mx: this.mx, mz: this.mz };
+    const count = keep + 1 + tail.length;
+    const grow = (from: Float32Array) => {
+      const next = new Float32Array(count);
+      next.set(from.subarray(0, keep + 1));
+      return next;
+    };
+    this.xs = grow(old.xs);
+    this.zs = grow(old.zs);
+    this.nx = grow(old.nx);
+    this.nz = grow(old.nz);
+    this.ys = grow(old.ys);
+    this.yTarget = grow(old.yTarget);
+    this.offset = grow(old.offset);
+    this.offsetTarget = grow(old.offsetTarget);
+    this.mx = grow(old.mx);
+    this.mz = grow(old.mz);
+    this.count = count;
+    this.length = (count - 1) * STEP;
+    tail.forEach((p, k) => {
+      const i = keep + 1 + k;
+      this.xs[i] = p.x;
+      this.zs[i] = p.z;
+      // Start from the old ground height here (or the anchor's), and from where it was drawn.
+      const was = i < old.count;
+      this.ys[i] = was ? old.ys[i] : old.ys[keep];
+      this.yTarget[i] = was ? old.yTarget[i] : old.yTarget[keep];
+      if (was) {
+        this.mx[i] = old.xs[i] + old.nx[i] * old.offset[i] + old.mx[i] - p.x;
+        this.mz[i] = old.zs[i] + old.nz[i] * old.offset[i] + old.mz[i] - p.z;
+      }
+    });
+    this.computeSideways(keep - 5);
+    this.morphFrom = this.morphing ? Math.min(this.morphFrom, keep + 1) : keep + 1;
+    this.morphing = true;
+    this.lastProjected = Math.min(this.lastProjected, count - 1);
+    // Staircases found on the old line ahead aren't on this one.
+    const cut = keep * STEP;
+    this.stairs = this.stairs.filter(span => span.fromS <= cut);
+    // (The next hazard check re-plans it, and re-walks how far the ground has been seen.)
+    if (this.status.blockedAtS !== null && this.status.blockedAtS > cut) {
+      this.status.blockedAtS = null;
+      this.status.blockReason = null;
+    }
+  }
+
+  /** The route's own line at `s`: no detour, ground height or re-lay glide. */
+  centreAt(s: number, out: { x: number; z: number }) {
+    const f = THREE.MathUtils.clamp(s / STEP, 0, this.count - 1);
+    const i = Math.min(Math.floor(f), this.count - 2);
+    const t = f - i;
+    out.x = this.xs[i] + (this.xs[i + 1] - this.xs[i]) * t;
+    out.z = this.zs[i] + (this.zs[i + 1] - this.zs[i]) * t;
+    return out;
+  }
+
+  /** How far the drawn line is bent sideways from the route at `s` by a detour. */
+  detourAt(s: number, out: { x: number; z: number }) {
+    const i = this.index(s);
+    out.x = this.nx[i] * this.offset[i];
+    out.z = this.nz[i] * this.offset[i];
+    return out;
+  }
+
+  /** Distance along the route (between `from` and `to`) of its line's point nearest (x, z). Doesn't move progress. */
+  closestS(x: number, z: number, from = 0, to = this.length): { s: number; distance: number } {
+    let best = this.index(from);
+    let bestD = Infinity;
+    for (let i = this.index(from); i <= this.index(to); i++) {
+      const d = (this.xs[i] - x) ** 2 + (this.zs[i] - z) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return { s: best * STEP, distance: Math.sqrt(bestD) };
   }
 
   get ready() {
@@ -158,7 +266,7 @@ export class Path {
     const t = f - i;
     const lerp = (arr: Float32Array) => arr[i] + (arr[i + 1] - arr[i]) * t;
     const off = lerp(this.offset);
-    return out.set(lerp(this.xs) + lerp(this.nx) * off, lerp(this.ys), lerp(this.zs) + lerp(this.nz) * off);
+    return out.set(lerp(this.xs) + lerp(this.nx) * off + lerp(this.mx), lerp(this.ys), lerp(this.zs) + lerp(this.nz) * off + lerp(this.mz));
   }
 
   /** Horizontal direction of travel at `s`, following the displayed (detoured) line. */
@@ -251,8 +359,25 @@ export class Path {
     }
     const ease = Math.min(1, dt * 2.5);
     for (let i = i0; i <= i1; i++) this.offset[i] += (this.offsetTarget[i] - this.offset[i]) * ease;
+    if (this.morphing) this.settleMorph(dt);
 
     this.drawDashes(timeSeconds, runnerS);
+  }
+
+  /** Let a re-laid stretch glide the rest of the way to where it now lies. */
+  private settleMorph(dt: number) {
+    const keepLeft = Math.exp(-dt * MORPH_RATE);
+    let largest = 0;
+    for (let i = this.morphFrom; i < this.count; i++) {
+      this.mx[i] *= keepLeft;
+      this.mz[i] *= keepLeft;
+      largest = Math.max(largest, Math.abs(this.mx[i]), Math.abs(this.mz[i]));
+    }
+    if (largest < 0.002) {
+      this.mx.fill(0);
+      this.mz.fill(0);
+      this.morphing = false;
+    }
   }
 
   private index(s: number) {
