@@ -194,6 +194,10 @@ export class BuddyPacer {
     if (!action) throw new Error(`No clip called ${name}`);
     this.play(name);
     action.setLoop(THREE.LoopRepeat, repeats);
+    // Hold the last frame when the repeats run out, so it can crossfade into `thenName`. Left
+    // to stop, it drops to no weight at once while the next clip is still fading in, and for
+    // that crossfade the body sags toward its bind pose (arms flung straight out).
+    action.clampWhenFinished = true;
     this.then = { action, name, thenName };
   }
 
@@ -250,6 +254,7 @@ export class BuddyPacer {
   private endThen() {
     if (!this.then) return;
     this.then.action.setLoop(THREE.LoopRepeat, Infinity);
+    this.then.action.clampWhenFinished = false;
     this.then = null;
   }
 

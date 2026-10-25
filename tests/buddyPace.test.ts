@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BUILT_HEIGHT, GAITS, PACE_DEFAULTS, pacePlan } from '../src/partner/buddyPace';
+import * as THREE from 'three';
+import { BuddyPacer, BUILT_HEIGHT, GAITS, PACE_DEFAULTS, pacePlan } from '../src/partner/buddyPace';
 
 const close = (a: number, b: number, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`);
 
@@ -61,4 +62,25 @@ test('nearly stopped is too slow to show as a slow-motion jog', () => {
   assert.equal(pacePlan(0.79 * 0.55).tooSlow, true);
   assert.equal(pacePlan(0.79 * 0.65).tooSlow, false);
   assert.equal(pacePlan(1.6).tooSlow, false);
+});
+
+test('a flourish hands back to the loop without the body sagging to its bind pose', () => {
+  const model = new THREE.Group();
+  const bone = new THREE.Bone();
+  bone.name = 'Hips';
+  model.add(bone);
+  const clip = (name: string, length: number) =>
+    new THREE.AnimationClip(name, length, [new THREE.NumberKeyframeTrack('Hips.position[x]', [0, length], [1, 1])]);
+  const pacer = new BuddyPacer(model, [clip('Idle', 2), clip('Wave', 0.6)]);
+  pacer.play('Idle');
+  pacer.playThen('Wave', 2, 'Idle');
+  // Through the wave, its end and the crossfade back, the clips' weights always add up to all of it.
+  let least = Infinity;
+  for (let frame = 0; frame < 150; frame++) {
+    pacer.update(1 / 60);
+    const total = Object.values(pacer.actions).reduce((sum, action) => sum + action.getEffectiveWeight(), 0);
+    least = Math.min(least, total);
+  }
+  assert.equal(pacer.current, 'Idle');
+  close(least, 1, 1e-6);
 });
