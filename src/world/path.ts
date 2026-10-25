@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Hazard, SurfaceMap } from './surfaceMap';
+import { CELL_SIZE, type Hazard, type HazardCell, type SurfaceMap } from './surfaceMap';
 
 /** Route samples are evenly spaced, so the sample index is just distance / STEP. */
 const STEP = 0.1;
@@ -27,11 +27,43 @@ const TRAVEL_STRIDE = 0.5;
 const TRAVEL_WITHIN = 2;
 /** Ground at least this far above the path's floor, when looking for stairs, is a tread. */
 const RAISED_TREAD = 0.1;
-/** Side-steps tried, in metres, when something blocks the way. */
-const DETOURS = [0.6, 0.9, 1.2];
-/** Margin kept clear before and after an obstacle, and length of the ramp into a detour. */
-const CLEARANCE = 0.4;
+/**
+ * The buddy is about 0.5 m wide: its body reaches BODY_HALF_WIDTH either side of the line and
+ * never overlaps a hazardous cell (measured to the edge of the 20 cm cell that flagged it). It
+ * keeps BODY_MARGIN more (a cell: what's flagged is often only part of the thing, field tests
+ * had a bin's cells confirmed a few at a time) unless the only way through is a squeeze (a
+ * doorway, or a gap between noise and a wall), and prefers more still where there's room: closer
+ * than ROOMY costs a little, so it goes round on the side with more space. The first RUNNER_ROOM
+ * ahead isn't held to any of that: it's where the runner already is, so whatever is flagged there
+ * they're stepping past.
+ */
+const BODY_HALF_WIDTH = 0.25;
+const BODY_MARGIN = 0.2;
+const ROOMY = 0.8;
+const RUNNER_ROOM = 0.2;
+/**
+ * The line may run up to DETOUR_MAX to either side of the route, in LATERAL_STEP steps, moving at
+ * most one step sideways per sample (45°), and settles back onto the route over RAMP past the
+ * stretch that was checked.
+ */
+const LATERAL_STEP = 0.1;
+const DETOUR_MAX = 1.2;
+const LANES = Math.round(DETOUR_MAX / LATERAL_STEP);
 const RAMP = 1.0;
+/**
+ * What the plan weighs, per sample, against a metre to the side: squeezing through with no margin
+ * (so it goes up to a couple of metres out of its way rather than squeeze), cramped clearance
+ * (at the margin), each step sideways, and differing from the last plan (so it doesn't flip
+ * between two equally good sides).
+ */
+const SQUEEZED = 2;
+const CRAMPED = 0.5;
+const TURNING = 0.2;
+const KEEP_PLAN = 0.3;
+/** Bending this far to the side counts as going round something (the buddy says so). */
+const DETOUR_SHOWN = 0.3;
+/** Cells this close to the line along recognised stairs are its treads. */
+const STAIRS_HALF_WIDTH = 0.6;
 /**
  * When the route ahead is re-laid (follow-me), the drawn line glides from where it was to its
  * new place instead of jumping: what is left of the move shrinks by this rate per second.
@@ -102,6 +134,7 @@ export class Path {
   private readonly tangent = new THREE.Vector3();
   private readonly color = new THREE.Color();
   private readonly hidden = new THREE.Matrix4().makeScale(0, 0, 0);
+  private readonly hazardScratch: HazardCell[] = [];
 
   constructor() {
     const geometry = new THREE.PlaneGeometry(0.09, 0.15).rotateX(-Math.PI / 2);
@@ -439,24 +472,98 @@ export class Path {
     return hazard;
   }
 
-  /** Find blocked stretches ahead and try to side-step each one; otherwise mark it blocked. */
+  /**
+   * Re-plan the line ahead (to HAZARD_AHEAD): first recognise stairs and landings along it, then
+   * pick how far to the side the line runs at each point so the buddy's body keeps clear of
+   * every hazard (see BODY_HALF_WIDTH), or mark where there's no way through.
+   */
   private planDetours(runnerS: number, map: SurfaceMap, now: number) {
     const a = this.index(runnerS);
     const b = this.index(runnerS + HAZARD_AHEAD);
-    const ramp = Math.round(RAMP / STEP);
-    const margin = Math.round(CLEARANCE / STEP);
-    const previous = this.offsetTarget.slice(a, b + 1);
-    for (let i = a; i <= Math.min(this.count - 1, b + ramp); i++) this.offsetTarget[i] = 0;
-
+    const e = Math.min(this.count - 1, b + Math.round(RAMP / STEP));
+    const previous = this.offsetTarget.slice(a, e + 1);
+    this.offsetTarget.fill(0, a, e + 1);
     this.status.blockedAtS = null;
     this.status.blockReason = null;
     this.status.detouring = false;
+    this.findStairs(a, b, map, now);
+    const room = this.roomAround(a, e, map, now);
 
+    // Best line through the sideways positions (LATERAL_STEP apart), sample by sample: as little
+    // to the side as possible, roomy where there's room, steady, and like the last plan.
+    const lanes = 2 * LANES + 1;
+    const samples = e - a + 1;
+    const cost = new Float64Array(samples * lanes).fill(Infinity);
+    const from = new Int8Array(samples * lanes);
+    let blockedAt = -1;
+    for (let k = 0; k < samples; k++) {
+      const i = a + k;
+      const onStairs = this.stairsAt(i * STEP) !== undefined;
+      let reachable = false;
+      for (let j = 0; j < lanes; j++) {
+        const side = (j - LANES) * LATERAL_STEP;
+        let here = Math.abs(side) + KEEP_PLAN * Math.abs(side - (previous[k] ?? 0));
+        if (onStairs) {
+          // Straight up recognised stairs; their treads aren't in the way.
+          if (side !== 0) continue;
+        } else if (i <= b && k * STEP >= RUNNER_ROOM) {
+          const clear = room.clearance(this.xs[i] + this.nx[i] * side, this.zs[i] + this.nz[i] * side, this.dropsIgnoredAt(i * STEP) ? OBSTACLE : OBSTACLE | DROP);
+          const margin = BODY_HALF_WIDTH + BODY_MARGIN;
+          if (clear < BODY_HALF_WIDTH) continue;
+          if (clear < margin) here += SQUEEZED * ((margin - clear) / BODY_MARGIN) ** 2;
+          if (clear < ROOMY) here += CRAMPED * ((ROOMY - Math.max(clear, margin)) / (ROOMY - margin)) ** 2;
+        }
+        let best = k === 0 ? 0 : Infinity;
+        let bestFrom = 0;
+        if (k > 0) {
+          for (let step = -1; step <= 1; step++) {
+            const was = j + step;
+            if (was < 0 || was >= lanes) continue;
+            const c = cost[(k - 1) * lanes + was] + (step === 0 ? 0 : TURNING);
+            if (c < best) {
+              best = c;
+              bestFrom = was;
+            }
+          }
+        }
+        if (best === Infinity) continue;
+        cost[k * lanes + j] = best + here;
+        from[k * lanes + j] = bestFrom;
+        reachable = true;
+      }
+      if (!reachable) {
+        blockedAt = k;
+        break;
+      }
+    }
+
+    const last = blockedAt === -1 ? samples - 1 : blockedAt - 1;
+    if (last >= 0) {
+      let j = 0;
+      for (let l = 1; l < lanes; l++) if (cost[last * lanes + l] < cost[last * lanes + j]) j = l;
+      for (let k = last; k >= 0; k--) {
+        this.offsetTarget[a + k] = (j - LANES) * LATERAL_STEP;
+        j = from[k * lanes + j];
+      }
+      // Past a block the line holds its side (it's drawn red there anyway).
+      this.offsetTarget.fill(this.offsetTarget[a + last], a + last + 1, e + 1);
+    }
+    for (let i = a; i <= b; i++) if (Math.abs(this.offsetTarget[i]) >= DETOUR_SHOWN) this.status.detouring = true;
+    if (blockedAt !== -1) {
+      const i = a + blockedAt;
+      this.status.blockedAtS = i * STEP;
+      this.status.blockReason = room.worstNear(this.xs[i], this.zs[i], DETOUR_MAX + BODY_HALF_WIDTH + BODY_MARGIN, this.dropsIgnoredAt(i * STEP));
+    }
+  }
+
+  /**
+   * Walk the line ahead for blocked stretches that are stairs going up (they're climbed, not
+   * avoided), and claim the landing past their top as ground.
+   */
+  private findStairs(a: number, b: number, map: SurfaceMap, now: number) {
     let i = a;
     while (i <= b) {
-      // Recognised stairs are passable, and their landing gets learned as ground.
-      const onStairs = this.stairsAt(i * STEP) !== undefined;
-      const hazard = onStairs ? null : this.hazardAtOffset(i, 0, map, now);
+      const hazard = this.stairsAt(i * STEP) ? null : this.hazardAtOffset(i, 0, map, now);
       if (!hazard || this.claimLanding(i, map, now)) {
         i++;
         continue;
@@ -469,32 +576,45 @@ export class Path {
         if (next === 'obstacle') worst = 'obstacle';
         end++;
       }
-      if (worst === 'obstacle') {
-        const stairs = this.detectStairs(i, map, now);
-        if (stairs) {
-          this.markStairs(stairs);
-          i = this.index(stairs.toS) + 1;
-          continue;
-        }
-      }
-      const preferred = Math.sign(previous[Math.min(previous.length - 1, i - a)] || 0) || 1;
-      const side = this.findClearSide(i - margin, end + margin, preferred, map, now);
-      if (side === null) {
-        this.status.blockedAtS = i * STEP;
-        this.status.blockReason = worst;
-        // Nothing beyond a blocked stretch is reachable, so stop planning there.
-        break;
-      }
-      this.status.detouring = true;
-      for (let k = Math.max(0, i - margin - ramp); k <= Math.min(this.count - 1, end + margin + ramp); k++) {
-        const before = i - margin - k;
-        const after = k - (end + margin);
-        const distance = Math.max(before, after, 0);
-        const weight = distance === 0 ? 1 : 0.5 + 0.5 * Math.cos((Math.PI * distance) / ramp);
-        if (Math.abs(side * weight) > Math.abs(this.offsetTarget[k])) this.offsetTarget[k] = side * weight;
-      }
-      i = end + 1;
+      const stairs = worst === 'obstacle' ? this.detectStairs(i, map, now) : null;
+      if (stairs) this.markStairs(stairs);
+      i = stairs ? this.index(stairs.toS) + 1 : end + 1;
     }
+  }
+
+  /** Just past the top of known stairs, the steps below look like a drop. They're the stairs. */
+  private dropsIgnoredAt(s: number) {
+    return this.stairs.some(span => s > span.toS && s <= span.toS + 0.8);
+  }
+
+  /**
+   * The hazards around samples a..e, wide enough for every sideways position tried, with the
+   * treads of recognised stairs left out.
+   */
+  private roomAround(a: number, e: number, map: SurfaceMap, now: number): Room {
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let z0 = Infinity;
+    let z1 = -Infinity;
+    for (let i = a; i <= e; i++) {
+      x0 = Math.min(x0, this.xs[i]);
+      x1 = Math.max(x1, this.xs[i]);
+      z0 = Math.min(z0, this.zs[i]);
+      z1 = Math.max(z1, this.zs[i]);
+    }
+    const pad = DETOUR_MAX + ROOMY + CELL_SIZE;
+    const radius = Math.max(x1 - x0, z1 - z0) / 2 + pad;
+    const room = new Room((x0 + x1) / 2, (z0 + z1) / 2, radius);
+    for (const cell of map.hazardCells((x0 + x1) / 2, (z0 + z1) / 2, radius, now, this.hazardScratch)) {
+      room.add(cell.x, cell.z, cell.kind === 'obstacle' ? OBSTACLE : DROP);
+    }
+    for (const span of this.stairs) {
+      for (let i = this.index(span.fromS); i <= this.index(span.toS); i++) {
+        if (i < a || i > e) continue;
+        room.clear(this.xs[i], this.zs[i], STAIRS_HALF_WIDTH);
+      }
+    }
+    return room;
   }
 
   /**
@@ -571,20 +691,6 @@ export class Path {
     return this.hazardAtOffset(i, 0, map, now) === null;
   }
 
-  private findClearSide(from: number, to: number, preferred: number, map: SurfaceMap, now: number): number | null {
-    const lo = Math.max(0, from);
-    const hi = Math.min(this.count - 1, to);
-    for (const distance of DETOURS) {
-      for (const sign of [preferred, -preferred]) {
-        const side = distance * sign;
-        let clear = true;
-        for (let i = lo; i <= hi && clear; i += 2) clear = this.hazardAtOffset(i, side, map, now) === null;
-        if (clear) return side;
-      }
-    }
-    return null;
-  }
-
   /** A fixed pool of dashes slides along with the runner, so long routes cost nothing extra. */
   private drawDashes(timeSeconds: number, runnerS: number) {
     const first = Math.ceil((runnerS - DASHES_BEHIND) / DASH_SPACING) * DASH_SPACING;
@@ -611,6 +717,90 @@ export class Path {
 }
 
 const unitScale = new THREE.Vector3(1, 1, 1);
+
+const NO_HAZARD = 0;
+const OBSTACLE = 1;
+const DROP = 2;
+/** Clearance is looked for this many cells out (anything further is roomy enough). */
+const REACH = Math.ceil(ROOMY / CELL_SIZE) + 1;
+
+/** The hazard cells in a square patch of the map, for answering "how much room is here" quickly. */
+class Room {
+  private readonly ix0: number;
+  private readonly iz0: number;
+  private readonly size: number;
+  private readonly kinds: Uint8Array;
+
+  constructor(x: number, z: number, radius: number) {
+    const r = Math.ceil(radius / CELL_SIZE) + REACH;
+    this.ix0 = Math.floor(x / CELL_SIZE) - r;
+    this.iz0 = Math.floor(z / CELL_SIZE) - r;
+    this.size = 2 * r + 1;
+    this.kinds = new Uint8Array(this.size * this.size);
+  }
+
+  private at(ix: number, iz: number) {
+    const u = ix - this.ix0;
+    const v = iz - this.iz0;
+    return u < 0 || v < 0 || u >= this.size || v >= this.size ? -1 : u * this.size + v;
+  }
+
+  add(x: number, z: number, kind: number) {
+    const k = this.at(Math.floor(x / CELL_SIZE), Math.floor(z / CELL_SIZE));
+    if (k >= 0) this.kinds[k] = kind;
+  }
+
+  /** Forget hazards in cells whose centre is within `radius` of a point. */
+  clear(x: number, z: number, radius: number) {
+    const r = Math.ceil(radius / CELL_SIZE);
+    const cx = Math.floor(x / CELL_SIZE);
+    const cz = Math.floor(z / CELL_SIZE);
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dz = -r; dz <= r; dz++) {
+        const k = this.at(cx + dx, cz + dz);
+        if (k < 0 || Math.hypot((cx + dx + 0.5) * CELL_SIZE - x, (cz + dz + 0.5) * CELL_SIZE - z) > radius) continue;
+        this.kinds[k] = NO_HAZARD;
+      }
+    }
+  }
+
+  /**
+   * Distance from a point to the edge of the nearest cell of the kinds in `mask` (ROOMY or more
+   * if none is near).
+   */
+  clearance(x: number, z: number, mask: number): number {
+    const cx = Math.floor(x / CELL_SIZE);
+    const cz = Math.floor(z / CELL_SIZE);
+    let best = REACH * CELL_SIZE;
+    for (let dx = -REACH; dx <= REACH; dx++) {
+      for (let dz = -REACH; dz <= REACH; dz++) {
+        const k = this.at(cx + dx, cz + dz);
+        if (k < 0 || (this.kinds[k] & mask) === 0) continue;
+        const ex = Math.max(0, Math.abs(x - (cx + dx + 0.5) * CELL_SIZE) - CELL_SIZE / 2);
+        const ez = Math.max(0, Math.abs(z - (cz + dz + 0.5) * CELL_SIZE) - CELL_SIZE / 2);
+        best = Math.min(best, Math.hypot(ex, ez));
+      }
+    }
+    return best;
+  }
+
+  /** What's in the way within `radius` of a point: an obstacle if there's one, else a drop. */
+  worstNear(x: number, z: number, radius: number, ignoreDrops: boolean): Hazard {
+    const r = Math.ceil(radius / CELL_SIZE);
+    const cx = Math.floor(x / CELL_SIZE);
+    const cz = Math.floor(z / CELL_SIZE);
+    let drop = false;
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dz = -r; dz <= r; dz++) {
+        const k = this.at(cx + dx, cz + dz);
+        if (k < 0) continue;
+        if (this.kinds[k] === OBSTACLE) return 'obstacle';
+        if (this.kinds[k] === DROP && !ignoreDrops) drop = true;
+      }
+    }
+    return drop ? 'drop' : 'obstacle';
+  }
+}
 
 /** Evenly re-space a polyline so every sample is `step` metres apart. */
 export function resample(points: RoutePoint[], step: number): RoutePoint[] {
