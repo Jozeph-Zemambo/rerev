@@ -21,6 +21,7 @@ import { savedBuddy, setupBuddyPicker } from './ui/buddyPicker';
 import { SpeechBubble } from './ui/speechBubble';
 import { showRecentRuns, SummaryScreen } from './ui/summary';
 import { Diagnostics } from './ui/diagnostics';
+import { FieldLog } from './debug/fieldLog';
 import { LineVoice } from './ui/voice';
 import { VoiceCommands } from './ui/voiceCommands';
 import { PendingQuestion, routeTranscript } from './voice/conversation';
@@ -156,6 +157,9 @@ let idleLine = 0;
 const depthSensor = new DepthSensor();
 const groundRays = new GroundRays();
 const diagnostics = new Diagnostics(byId('lead-stat'));
+/** Field-test recording (`?field`): raw sensor and surface-map data, uploaded to Convex. */
+const field = new FieldLog(convex);
+if (field.enabled) map.probe = field;
 let depthPoints = 0;
 let rayHits = 0;
 
@@ -440,6 +444,8 @@ function clearRunScene() {
 }
 
 function endRun() {
+  field.event('run end', { distance: recorder.distanceSoFar });
+  field.upload();
   const summary = placed ? recorder.finish(performance.now() / 1000) : null;
   placed = false;
   mode = null;
@@ -472,6 +478,17 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
   // A course keeps what the map learned while you walked it.
   if (mode?.kind !== 'course') map.reset();
   map.walkableStep = routeRun ? KERB : 0;
+  const view = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const phone = new THREE.Vector3().setFromMatrixPosition(view.matrixWorld);
+  field.event('run start', {
+    mode: mode?.kind,
+    floorY: r3(floorY),
+    phone: phone.toArray().map(r3),
+    // Standing upright this is ~1.3-1.5 m; much less means the floor was found too high.
+    phoneAboveFloor: r3(phone.y - floorY),
+    walkableStep: map.walkableStep,
+    pathLength: r3(points.length),
+  });
   for (const seed of seeds) map.seedGround(seed.x, floorY, seed.z, 1);
   path.setRoute(points, floorY);
   path.group.visible = true;
@@ -1091,7 +1108,53 @@ function diagnosticRows(runnerS: number, trackingLost: boolean): [string, string
       ['off path', `${Math.hypot(onPath.x - runner.x, onPath.z - runner.z).toFixed(1)} m at ${runnerS.toFixed(0)} m`],
     );
   }
+  if (field.enabled) {
+    const cells = map.hazardCells(runner.x, runner.z, 6, performance.now() / 1000, []);
+    const ahead = path.pointAt(runnerS + 3, new THREE.Vector3());
+    const ref = map.referenceGround(ahead.x, ahead.z);
+    rows.push(
+      ['hazards', `${cells.filter(c => c.kind === 'obstacle').length} obstacle, ${cells.filter(c => c.kind === 'drop').length} drop cells within 6 m`],
+      ['blocked', path.status.blockedAtS === null ? 'no' : `${path.status.blockReason} at +${(path.status.blockedAtS - runnerS).toFixed(1)} m`],
+      ['ground', `path 3 m ahead at ${ahead.y.toFixed(2)}, map says ${ref === null ? '?' : ref.toFixed(2)}`],
+      ['field log', `${field.session}, ${field.sent} sent${field.failed ? `, ${field.failed} failed` : ''}`],
+    );
+  }
   return rows;
+}
+
+const r3 = (n: number) => Math.round(n * 1000) / 1000;
+
+/** One field-test snapshot: where the phone is, what the path and map think, and why. */
+function fieldSnapshot(now: number, runnerS: number, trackingLost: boolean): Record<string, unknown> {
+  const view = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const position = new THREE.Vector3().setFromMatrixPosition(view.matrixWorld);
+  const forward = new THREE.Vector3(0, 0, -1).transformDirection(view.matrixWorld);
+  const along = (offset: number) => {
+    const p = path.pointAt(runnerS + offset, new THREE.Vector3());
+    const ground = map.groundAt(p.x, p.z);
+    const ref = map.referenceGround(p.x, p.z);
+    return { d: offset, x: r3(p.x), z: r3(p.z), pathY: r3(p.y), ground: ground === null ? null : r3(ground), ref: ref === null ? null : r3(ref) };
+  };
+  const cells = map.hazardCells(runner.x, runner.z, 6, now, []);
+  return {
+    mode: mode?.kind,
+    tracking: trackingLost ? 'lost' : 'ok',
+    camera: position.toArray().map(r3),
+    heading: r3(Math.atan2(forward.x, -forward.z)),
+    pitch: r3(Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1))),
+    runnerS: r3(runnerS),
+    buddyS: r3(partner.s),
+    state: partner.state,
+    path: { length: r3(path.length), blockedAtS: path.status.blockedAtS, reason: path.status.blockReason, detouring: path.status.detouring, seenUntilS: r3(path.status.seenUntilS) },
+    ahead: [0, 1, 2, 3, 4, 6].map(along),
+    hazards: cells.slice(0, 40).map(c => [r3(c.x), r3(c.z), r3(c.y), c.kind === 'drop' ? 'D' : 'O']),
+    hazardCounts: { obstacle: cells.filter(c => c.kind === 'obstacle').length, drop: cells.filter(c => c.kind === 'drop').length },
+    depthPoints,
+    rayHits,
+    walkableStep: map.walkableStep,
+    mapCells: map.size,
+    gps: gps.latest ? { accuracy: gps.latest.accuracy } : null,
+  };
 }
 
 const clock = new THREE.Clock();
@@ -1209,6 +1272,7 @@ renderer.setAnimationLoop((time, frame) => {
     if (hud.breakButton.textContent !== breakLabel) hud.breakButton.textContent = breakLabel;
     bubble.update(point, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera, now);
     if (diagnostics.due(now)) diagnostics.show(diagnosticRows(runnerS, trackingLost));
+    field.tick(now, () => fieldSnapshot(now, runnerS, trackingLost));
   }
 
   // Nothing 3D to show on the home, planner or summary screens.

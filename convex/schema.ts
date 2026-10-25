@@ -38,4 +38,12 @@ export default defineSchema({
     pace: v.number(),
     hr: v.optional(v.number()),
   }).index('by_runId_and_t', ['runId', 't']),
+
+  /** Field-test recordings (`?field`): sensor and surface-map snapshots from walks outside. */
+  fieldLogs: defineTable({
+    session: v.string(),
+    t: v.number(),
+    kind: v.string(),
+    data: v.any(),
+  }).index('by_session_and_t', ['session', 't']),
 });

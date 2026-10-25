@@ -8,7 +8,7 @@ const REDRAW_EVERY = 0.25;
  */
 export class Diagnostics {
   private readonly el = document.getElementById('diag')!;
-  private visible = new URLSearchParams(location.search).has('debug');
+  private visible = new URLSearchParams(location.search).has('debug') || new URLSearchParams(location.search).has('field');
   private lastDraw = 0;
   private frames = 0;
   private fpsFrom = 0;

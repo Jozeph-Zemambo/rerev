@@ -14,6 +14,16 @@ export type Hazard = 'obstacle' | 'drop';
 
 export type HazardCell = { x: number; z: number; y: number; kind: Hazard };
 
+/** What a depth point was judged as: refined the ground, voted a hazard, or was left out. */
+export type DepthVerdict = 'ground' | 'obstacle' | 'drop' | 'between' | 'out of range' | 'no ground';
+
+/** Optional listener for field testing: sees every judgement the map makes, raw. */
+export type SurfaceProbe = {
+  depth(height: number, range: number, verdict: DepthVerdict): void;
+  /** A ground sample (`diff` = its height minus the known ground, null if none known yet). */
+  ground(diff: number | null, accepted: boolean, weight: number): void;
+};
+
 /** Points this far above the local ground count as an obstacle (stops at 2 m to ignore ceilings). */
 const OBSTACLE_MIN = 0.15;
 const OBSTACLE_MAX = 2.0;
@@ -72,6 +82,8 @@ export class SurfaceMap {
    * pavement to cross a road is normal.
    */
   walkableStep = 0;
+  /** Field testing only: told about every judgement. */
+  probe: SurfaceProbe | null = null;
 
   /** How far a trusted ground sample may sit from the known ground and still count as ground. */
   groundTolerance(base: number) {
@@ -149,7 +161,9 @@ export class SurfaceMap {
    */
   addGroundSample(x: number, y: number, z: number, weight = 1, tolerance = 0.08, now = -Infinity) {
     const reference = this.referenceGround(x, z);
-    if (reference !== null && Math.abs(y - reference) > tolerance) return;
+    const rejected = reference !== null && Math.abs(y - reference) > tolerance;
+    if (weight >= 1) this.probe?.ground(reference === null ? null : y - reference, !rejected, weight);
+    if (rejected) return;
     const cell = this.cell(cellIndex(x), cellIndex(z));
     const total = cell.groundWeight + weight;
     cell.ground = cell.groundWeight > 0 ? (cell.ground * cell.groundWeight + y * weight) / total : y;
@@ -164,15 +178,20 @@ export class SurfaceMap {
    */
   addDepthPoint(x: number, y: number, z: number, now: number, range = 0) {
     const reference = this.referenceGround(x, z);
-    if (reference === null) return;
+    if (reference === null) {
+      this.probe?.depth(NaN, range, 'no ground');
+      return;
+    }
     const height = y - reference;
     if (Math.abs(height) <= GROUND_BAND) {
+      this.probe?.depth(height, range, 'ground');
       this.addGroundSample(x, y, z, 0.3, GROUND_BAND, now);
       return;
     }
     const margin = NOISE_PER_METRE * Math.max(0, range - NOISE_FROM);
     const isObstacle = height >= Math.max(OBSTACLE_MIN, this.walkableStep) + margin && height <= OBSTACLE_MAX;
     const isDrop = height <= -(Math.max(DROP_MIN, this.walkableStep) + margin) && height >= -DROP_MAX;
+    this.probe?.depth(height, range, isObstacle ? 'obstacle' : isDrop ? 'drop' : Math.abs(height) > 1.5 ? 'out of range' : 'between');
     if (!isObstacle && !isDrop) return;
     const cell = this.cell(cellIndex(x), cellIndex(z));
     if (cell.groundWeight === 0) cell.ground = reference;
