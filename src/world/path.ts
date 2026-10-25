@@ -502,11 +502,8 @@ export function resample(points: RoutePoint[], step: number): RoutePoint[] {
 
 /** The indoor demo route: a gentle S-curve heading away from where the user stands. */
 export function demoRoute(start: THREE.Vector3, direction: THREE.Vector3, length: number): RoutePoint[] {
-  const side = new THREE.Vector3().crossVectors(UP, direction).normalize();
+  // Straight ahead: a wavy line looked lively in a room but just looked wrong on a sidewalk.
   const points: RoutePoint[] = [];
-  for (let u = 0; u <= length; u += 0.5) {
-    const sway = Math.sin((u / 8) * Math.PI * 2) * 0.6;
-    points.push({ x: start.x + direction.x * u + side.x * sway, z: start.z + direction.z * u + side.z * sway });
-  }
+  for (let u = 0; u <= length; u += 0.5) points.push({ x: start.x + direction.x * u, z: start.z + direction.z * u });
   return points;
 }
