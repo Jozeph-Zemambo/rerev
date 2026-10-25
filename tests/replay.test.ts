@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { COLS, ROWS, TOP } from '../src/ar/depthSensor';
-import { agreement, decodeDepth, encodeDepth, fetchAllRows, median, replaySession, type Row } from '../src/debug/replay';
+import { agreement, decodeDepth, encodeDepth, fetchAllRows, median, pathVsTrack, replaySession, type Row } from '../src/debug/replay';
 
 /**
  * A synthetic field recording in the exact logged format: a phone 1.4 m above a flat floor at
@@ -223,4 +223,19 @@ test('a frame logged again unchanged is skipped; an unchanged grid on a moving p
   assert.ok(at(1.3).repeated && at(1.3).points === 0);
   assert.ok(!at(1.4).repeated && !at(1.4).stale);
   assert.ok(at(1.5).stale && at(1.5).points > 0);
+});
+
+test('the path ahead is measured against the track the runner walked from then on, not past its end', () => {
+  // Walked 10 m straight along -z; at each metre the path's line ran 30 cm to the side.
+  const track = Array.from({ length: 41 }, (_, i) => ({ x: 0, z: -i * 0.25, along: i * 0.25 }));
+  const samples = Array.from({ length: 11 }, (_, i) => ({
+    along: i,
+    points: [2, 3, 4, 5, 6].map(d => [d, 0.3, -(i + d)] as [number, number, number]),
+  }));
+  const result = pathVsTrack(samples, track);
+  // +2 m is compared while it's at least a metre short of where the walk ended: from 0 to 7 m.
+  assert.equal(result.byAhead[0].n, 8);
+  assert.equal(result.byAhead[4].n, 4);
+  assert.ok(Math.abs(result.all.median! - 0.3) < 1e-9);
+  assert.equal(result.all.over50, 0);
 });

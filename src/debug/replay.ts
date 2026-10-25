@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { COLS, ROWS, TOP, DepthSensor } from '../ar/depthSensor';
 import { Partner, type PartnerState } from '../partner/partner';
 import { CourseRecording } from '../world/course';
+import { FollowMe } from '../world/followMe';
 import { Path, resample, type RoutePoint } from '../world/path';
 import { SurfaceMap, type DepthVerdict, type Hazard, type SurfaceProbe, type SurfaceTuning } from '../world/surfaceMap';
 
@@ -30,6 +31,8 @@ export type RunStartData = {
   seeds?: [number, number][];
   laps?: number;
   turnarounds?: number[];
+  /** Quick start followed the runner (logged since follow-me). */
+  follow?: boolean;
 };
 
 export type FrameData = { pose: number[]; projection?: number[]; depth: string; hits: number[][] };
@@ -109,6 +112,7 @@ export type EventKind =
   | 'rebase'
   | 'gap'
   | 'mark'
+  | 'follow'
   | 'note';
 
 export type ReplayEvent = { t: number; s: number | null; kind: EventKind; text: string; data?: Record<string, unknown> };
@@ -146,7 +150,59 @@ export type Segment = {
   /** Every tick the phone logged in this segment, for sessions that can't be replayed. */
   recordedTicks: Row[];
   marks: Row[];
+  /** The replay laid Quick start following the runner, and how often it re-laid the path. */
+  follow?: { bends: number; respawns: number; extends: number };
+  /** How far the path ahead of the runner stayed from where they actually went (runs only). */
+  pathVsTrack?: PathVsTrack;
 };
+
+/** Distances along the path ahead of the runner at which it's compared with their track. */
+export const AHEAD = [2, 3, 4, 5, 6];
+
+export type OffsetStats = { n: number; median: number | null; p90: number | null; max: number | null; over50: number };
+/** Per distance ahead (AHEAD), and all together. */
+export type PathVsTrack = { byAhead: OffsetStats[]; all: OffsetStats };
+
+/** The path's line ahead of the runner at one moment: [metres ahead, x, z]. */
+export type AheadSample = { along: number; points: [number, number, number][] };
+/** The runner's track: x, z and how far they had walked there. */
+export type TrackPoint = { x: number; z: number; along: number };
+
+/**
+ * For each sample, how far each of its points ahead is from the stretch of the runner's track
+ * they walked from then on (the nearest point of it). Points further ahead than the runner went
+ * before the recording ended are left out.
+ */
+export function pathVsTrack(samples: readonly AheadSample[], track: readonly TrackPoint[]): PathVsTrack {
+  const total = track.at(-1)?.along ?? 0;
+  const per = AHEAD.map(() => [] as number[]);
+  for (const sample of samples) {
+    const first = Math.max(0, track.findIndex(p => p.along >= sample.along - 0.5));
+    for (const [d, x, z] of sample.points) {
+      if (sample.along + d + 1 > total) continue;
+      let best = Infinity;
+      for (let i = first; i < track.length - 1; i++) best = Math.min(best, segmentDistance(x, z, track[i], track[i + 1]));
+      if (track.length === 1) best = Math.hypot(x - track[0].x, z - track[0].z);
+      const k = AHEAD.indexOf(d);
+      if (k >= 0 && Number.isFinite(best)) per[k].push(best);
+    }
+  }
+  return { byAhead: per.map(offsetStats), all: offsetStats(per.flat()) };
+}
+
+function segmentDistance(x: number, z: number, a: TrackPoint, b: TrackPoint): number {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const len2 = dx * dx + dz * dz;
+  const t = len2 > 0 ? THREE.MathUtils.clamp(((x - a.x) * dx + (z - a.z) * dz) / len2, 0, 1) : 0;
+  return Math.hypot(x - (a.x + dx * t), z - (a.z + dz * t));
+}
+
+function offsetStats(values: number[]): OffsetStats {
+  const sorted = [...values].sort((a, b) => a - b);
+  const at = (q: number) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : null);
+  return { n: sorted.length, median: median(sorted), p90: at(0.9), max: sorted.at(-1) ?? null, over50: sorted.filter(v => v > 0.5).length };
+}
 
 export type ReplayOptions = {
   tuning?: Partial<SurfaceTuning>;
@@ -169,6 +225,11 @@ export type ReplayOptions = {
   fillDepthGaps?: boolean;
   /** Keep every depth point (with its verdict) for frames at these times, for point-cloud dumps. */
   keepCloud?: (t: number) => boolean;
+  /**
+   * Lay Quick start runs following the runner (from the recorded camera track), or with the
+   * fixed straight path. By default, whatever the phone did (follow-me runs log it).
+   */
+  followMe?: boolean;
 };
 
 // ---------------------------------------------------------------- decoding and fetching
@@ -321,8 +382,12 @@ class Replayer {
   private pendingState: { state: PartnerState; since: number } | null = null;
   private flips = 0;
   private widestDetour = 0;
-  /** The route at 10 cm steps, exactly as the Path resamples it. */
-  private route: RoutePoint[] = [];
+  /** Follow-me, when this run follows the runner. */
+  private follow: FollowMe | null = null;
+  private readonly centre = { x: 0, z: 0 };
+  /** The path ahead of the runner at each frame, and the runner's track, for pathVsTrack. */
+  private aheadSamples: AheadSample[] = [];
+  private track: TrackPoint[] = [];
   private lastBlock: { s: number | null; reason: Hazard | null } = { s: null, reason: null };
   private wasDetouring = false;
   private streaks = { distrust: 0, stale: 0, repeated: 0 };
@@ -393,6 +458,9 @@ class Replayer {
   private close(t: number, reason: string) {
     const segment = this.segment;
     if (!segment) return;
+    if (segment.kind === 'run' && segment.replayable && this.track.length) segment.pathVsTrack = pathVsTrack(this.aheadSamples, this.track);
+    this.aheadSamples = [];
+    this.track = [];
     this.endStreaks(t);
     segment.endT = Math.max(segment.endT, t);
     segment.endReason = reason;
@@ -431,7 +499,18 @@ class Replayer {
     this.partner.turnarounds = data.turnarounds ?? [];
     for (const [x, z] of data.seeds ?? []) map.seedGround(x, data.floorY, z, 1);
     this.path.setRoute(points, data.floorY);
-    this.route = resample(points, 0.1);
+    this.follow = mode === 'quick' && (this.options.followMe ?? data.follow ?? false) ? new FollowMe() : null;
+    this.follow?.reset();
+    if (this.follow) {
+      segment.follow = { bends: 0, respawns: 0, extends: 0 };
+      segment.notes.push(
+        data.follow
+          ? 'Follow-me: the path follows the runner, re-laid from the recorded camera track (it may not re-lay at exactly the moments the phone did).'
+          : 'Follow-me replayed on a run the phone laid as a fixed straight path: the buddy and blocks differ from what the phone did, so the replay-vs-phone comparison is only a rough guide.',
+      );
+    }
+    this.aheadSamples = [];
+    this.track = [];
     this.partner.goalPace = mode === 'route' ? (this.options.pace ?? QUICK_PACE) : QUICK_PACE;
     if (mode === 'route' && this.options.pace === undefined) segment.notes.push('Map-route pace isn\'t logged; using 1.6 m/s (try --pace).');
     if (mode === 'route') segment.notes.push('GPS re-anchoring of the route isn\'t logged, so the route stays where it was first laid.');
@@ -585,8 +664,10 @@ class Replayer {
       const to = Math.floor(((k + 1) * hits.length) / steps);
       for (const [x, y, z] of hits.slice(from, to)) rebased += this.groundSample(x, y, z, t);
 
-      if (running) this.runnerS = this.path.project(at);
-      else this.recordAt(at);
+      if (running) {
+        this.runnerS = this.path.project(at);
+        if (this.follow) this.followUpdate(t, at);
+      } else this.recordAt(at);
 
       const last = k === steps - 1;
       const sensorTick = last || (steps - 1 - k) % planEvery === 0;
@@ -615,6 +696,7 @@ class Replayer {
       }
     }
     this.previousCamera.copy(this.camera);
+    if (running) this.sampleAhead();
     if (!this.projection) segment.notes.push(`Frame at ${row.t} s had no projection yet; its depth was skipped.`);
 
     const report = this.frameReport(row.t, points, stale, repeated, distrusted, rebased);
@@ -622,6 +704,45 @@ class Replayer {
     this.streak('distrust', distrusted, row.t, 'depth distrusted (most near points read as a drop while floor hits agree): drop votes ignored');
     this.streak('stale', stale, row.t, 'depth grid identical to the last frame while the phone moved (stale depth image)');
     this.streak('repeated', repeated, row.t, 'no depth from the phone (frame logged again unchanged)');
+  }
+
+  /** As in main.ts's frame loop: let follow-me re-lay the path, and say when it did. */
+  private followUpdate(t: number, at: THREE.Vector3) {
+    const event = this.follow!.update(t, at, this.runnerS, this.path, this.partner);
+    const counts = this.segment!.follow!;
+    if (!event) return;
+    if (event.kind === 'extend') {
+      counts.extends++;
+      return;
+    }
+    const h = this.follow!.travel.heading;
+    const heading = h ? `heading ${Math.round((Math.atan2(h.x, -h.z) * 180) / Math.PI)}°` : '';
+    if (event.kind === 'bend') {
+      counts.bends++;
+      this.event('follow', `path bent onto the runner's line from s ${r2(event.fromS)} (it was ${cm(event.error)} off), ${heading}`, t);
+    } else {
+      counts.respawns++;
+      this.event('follow', `runner got past the buddy: path re-laid from s ${r2(event.fromS)}, buddy picks up at s ${r2(event.buddyS)}, ${heading}`, t);
+    }
+  }
+
+  /**
+   * Where the path's line runs ahead of the runner, and where the runner is: once every 25 cm
+   * they move, so time spent standing still doesn't outweigh the walk.
+   */
+  private sampleAhead() {
+    const last = this.track.at(-1);
+    const moved = last ? Math.hypot(this.camera.x - last.x, this.camera.z - last.z) : 0;
+    if (last && moved < 0.25) return;
+    const along = last ? last.along + moved : 0;
+    this.track.push({ x: this.camera.x, z: this.camera.z, along });
+    const points: [number, number, number][] = [];
+    for (const d of AHEAD) {
+      if (this.runnerS + d > this.path.length) continue;
+      this.path.centreAt(this.runnerS + d, this.centre);
+      points.push([d, this.centre.x, this.centre.z]);
+    }
+    this.aheadSamples.push({ along, points });
   }
 
   /** One floor hit, as GroundRays.sample feeds it. Returns 1 if it moved a cell's ground. */
@@ -693,10 +814,9 @@ class Replayer {
     this.flips = 0;
   }
 
-  /** The route's centre line at `s`: the same 10 cm samples the Path holds. */
+  /** The route's centre line at `s` (as re-laid, when following). */
   private routeAt(s: number): RoutePoint {
-    const i = THREE.MathUtils.clamp(Math.round(s / 0.1), 0, this.route.length - 1);
-    return this.route[i];
+    return this.path.centreAt(s, { x: 0, z: 0 });
   }
 
   /** Widest sideways gap between the drawn path and the route over a stretch. */

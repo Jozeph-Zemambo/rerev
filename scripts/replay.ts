@@ -16,6 +16,9 @@
  *   --logged-depth-only   feed only the logged depth frames (5x a second). By default each is
  *                         also fed a tick earlier, standing in for the unlogged one in between
  *   --no-breaks           don't put the buddy on a break when the phone's log says it was
+ *   --follow              lay Quick start runs following the runner (from the recorded camera
+ *                         track), even ones the phone laid as a fixed straight path
+ *   --fixed               lay Quick start runs as the fixed straight path, even follow-me ones
  *   --window S            seconds of detail before and after each mark (default 3)
  *   --dump-mark N         write mark N's frames as a point cloud CSV (repeatable)
  *   --dump-marks          ... for every mark
@@ -31,6 +34,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  AHEAD,
   agreement,
   BAND_NAMES,
   cm,
@@ -38,6 +42,7 @@ import {
   median,
   replaySession,
   type FrameReport,
+  type OffsetStats,
   type ReplayEvent,
   type ReplayOptions,
   type Row,
@@ -62,7 +67,7 @@ for (let i = 0; i < argv.length; i++) {
   } else if (arg.startsWith('--')) flags.add(arg);
   else positional.push(arg);
 }
-const KNOWN_FLAGS = ['--hits-with-time', '--logged-depth-only', '--no-breaks', '--dump-marks', '--events-only', '--refresh', '--offline', '--help'];
+const KNOWN_FLAGS = ['--follow', '--fixed', '--hits-with-time', '--logged-depth-only', '--no-breaks', '--dump-marks', '--events-only', '--refresh', '--offline', '--help'];
 for (const flag of flags) if (!KNOWN_FLAGS.includes(flag)) fail(`Unknown option ${flag}`);
 if (flags.has('--help')) {
   console.log(readFileSync(new URL(import.meta.url), 'utf8').split('*/')[0].replace(/^\/\*\*?|^ \* ?/gm, ''));
@@ -262,7 +267,20 @@ function printSegment(segment: Segment, window: number, eventsOnly: boolean) {
   lines.sort((a, b) => a.t - b.t || a.order - b.order);
   for (const line of lines) console.log(line.text);
 
+  if (segment.kind === 'run') printPathVsTrack(segment);
   if (segment.kind === 'run') printAgreement(segment);
+}
+
+/** How well the path ahead kept to where the runner actually went. */
+function printPathVsTrack(segment: Segment) {
+  const result = segment.pathVsTrack;
+  if (segment.follow) console.log(`\n  Follow-me: ${segment.follow.bends} bends onto the runner's line, ${segment.follow.respawns} catch-ups after being passed, ${segment.follow.extends} extensions`);
+  if (!result || result.all.n === 0) return;
+  const stats = (s: OffsetStats) =>
+    `median ${f2(s.median)} m, 90% within ${f2(s.p90)} m, worst ${f2(s.max)} m, over 50 cm ${s.n ? Math.round((100 * s.over50) / s.n) : 0}%`;
+  console.log(`\n  Path ahead vs where the runner went (${segment.follow ? 'following' : 'fixed path'}; the path's line at +2…+6 m from the runner, against their track from then on):`);
+  AHEAD.forEach((d, k) => console.log(`    +${d} m: ${stats(result.byAhead[k])} (${result.byAhead[k].n} samples)`));
+  console.log(`    all:  ${stats(result.all)}`);
 }
 
 /** Re-based cells usually come in bursts (one floor patch at a time): one line per burst. */
@@ -366,6 +384,7 @@ const options: ReplayOptions = {
   hitsWithTime: flags.has('--hits-with-time'),
   fillDepthGaps: !flags.has('--logged-depth-only'),
   mirrorBreaks: !flags.has('--no-breaks'),
+  followMe: flags.has('--follow') ? true : flags.has('--fixed') ? false : undefined,
   keepCloud: markTimes.length ? t => markTimes.some(m => Math.abs(t - m) <= window) : undefined,
 };
 
