@@ -797,7 +797,7 @@ function beforeRun(dt: number, seconds: number, now: number, sensorTick: boolean
       if (sensorTick) {
         if (sim.world) {
           sim.world.sampleDepth(camera, map, now);
-          sim.world.sampleGround(camera, map);
+          sim.world.sampleGround(camera, map, now);
         } else if (frame && referenceSpace && depthEnabled) depthPoints = depthSensor.sample(frame, referenceSpace, map, now);
       }
       if (sim.walk && sim.walk.s >= sim.walkLengths.at(-1)!) {
@@ -1057,7 +1057,7 @@ function advanceSim(dt: number, now: number, sensorTick: boolean): number {
 
   if (sensorTick) {
     world.sampleDepth(camera, map, now);
-    world.sampleGround(camera, map);
+    world.sampleGround(camera, map, now);
   }
   return routeRun || following ? path.project(camera.position) : sim.runnerS;
 }
@@ -1219,7 +1219,7 @@ renderer.setAnimationLoop((time, frame) => {
       // Once a course is being recorded (or has been), the ring has done its job.
       reticle.visible = !!pose && !(mode?.kind === 'course' && course.phase !== 'find' && course.phase !== 'ready');
     }
-    if (placed || course.phase === 'recording') rayHits = groundRays.sample(frame, referenceSpace, map);
+    if (placed || course.phase === 'recording') rayHits = groundRays.sample(frame, referenceSpace, map, now);
   }
 
   if (!placed && mode) beforeRun(dt, seconds, now, sensorTick, trackingLost, frame, referenceSpace);

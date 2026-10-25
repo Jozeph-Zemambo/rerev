@@ -22,6 +22,7 @@ export class DepthSensor {
   private readonly viewToWorld = new THREE.Matrix4();
   private readonly point = new THREE.Vector3();
   private readonly samples: { d: number; x: number; y: number; z: number }[] = [];
+  private readonly camera = new THREE.Vector3();
 
   /** Returns how many usable points were read this frame (0 if the phone gave no depth). */
   sample(frame: XRFrame, referenceSpace: XRReferenceSpace, map: SurfaceMap, now: number): number {
@@ -53,7 +54,8 @@ export class DepthSensor {
 
     // Nearest first, so ground knowledge spreads outward before far points are judged.
     this.samples.sort((a, b) => a.d - b.d);
-    map.addDepthFrame(this.samples, now);
+    this.camera.setFromMatrixPosition(this.viewToWorld);
+    map.addDepthFrame(this.samples, now, this.camera);
     return this.samples.length;
   }
 }

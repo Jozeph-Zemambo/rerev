@@ -92,11 +92,12 @@ export class PreviewWorld {
       }
     }
     points.sort((a, b) => a.d - b.d);
-    map.addDepthFrame(points.map(({ d, p }) => ({ x: p.x, y: p.y, z: p.z, d })), now);
+    map.addDepthFrame(points.map(({ d, p }) => ({ x: p.x, y: p.y, z: p.z, d })), now, camera.position);
   }
 
   /** Simulated AR hit-tests: a few rays angled down at the ground ahead. */
-  sampleGround(camera: THREE.PerspectiveCamera, map: SurfaceMap) {
+  sampleGround(camera: THREE.PerspectiveCamera, map: SurfaceMap, now: number) {
+    const hits: { x: number; y: number; z: number }[] = [];
     const forward = camera.getWorldDirection(new THREE.Vector3()).setY(0).normalize();
     for (const pitch of [20, 30, 45]) {
       const p = (pitch * Math.PI) / 180;
@@ -106,8 +107,9 @@ export class PreviewWorld {
       this.hits.length = 0;
       this.raycaster.intersectObjects(this.solids, false, this.hits);
       const hit = this.hits[0];
-      if (hit) map.addGroundSample(hit.point.x, hit.point.y, hit.point.z, 2, map.groundTolerance(0.1));
+      if (hit) hits.push({ x: hit.point.x, y: hit.point.y, z: hit.point.z });
     }
+    map.addFloorHits(hits, now);
   }
 
   /** True ground height under a point (for placing the simulated runner's eyes). */
