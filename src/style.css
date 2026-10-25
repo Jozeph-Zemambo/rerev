@@ -213,19 +213,82 @@ button:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
   left: 12px;
   right: 12px;
   z-index: 3;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 10px;
+}
+/* "Where to?" */
+.place-search {
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-.planner-top h2 {
-  margin: 0;
-  font-family: var(--display);
-  font-size: 22px;
+  gap: 8px;
+  height: 44px;
+  box-sizing: border-box;
+  padding: 0 6px 0 14px;
   background: var(--paper);
-  padding: 6px 14px;
+  border: 2px solid transparent;
   border-radius: 999px;
   box-shadow: 0 3px 0 var(--line);
+  color: var(--ink-soft);
+  transition: border-color 150ms ease;
 }
+.place-search:focus-within { border-color: var(--sun); }
+.place-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 800 17px var(--body);
+  -webkit-appearance: none;
+  appearance: none;
+}
+.place-search input::placeholder { color: var(--ink-soft); opacity: 0.8; }
+.place-search input::-webkit-search-cancel-button { display: none; }
+.place-search button {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--cream);
+  color: var(--ink-soft);
+  font-size: 20px;
+  line-height: 1;
+}
+.place-panel {
+  grid-column: 1 / -1;
+  background: var(--paper);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(59, 36, 22, 0.2);
+  overflow: hidden;
+  max-height: 50vh;
+  overflow-y: auto;
+  animation: panel-in 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes panel-in { from { opacity: 0; transform: translateY(-4px); } }
+.place-note { margin: 0; padding: 12px 16px; font-weight: 700; color: var(--ink-soft); }
+.place-note.error { color: #c0392b; }
+#place-results { list-style: none; margin: 0; padding: 0; }
+#place-results li + li { border-top: 1px solid var(--line); }
+#place-results button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  padding: 11px 16px;
+  text-align: left;
+  color: var(--ink);
+}
+#place-results button:hover, #place-results button:focus-visible { background: var(--cream); outline: 0; }
+.place-text { flex: 1; min-width: 0; display: grid; }
+.place-text b { font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.place-text small { color: var(--ink-soft); font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.place-away { flex-shrink: 0; font-weight: 800; font-size: 13px; color: var(--coral); font-variant-numeric: tabular-nums; }
 .round {
   width: 44px;
   height: 44px;
@@ -252,14 +315,40 @@ button:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
   max-height: 62%;
   overflow-y: auto;
 }
-/* The start button stays in reach even when the sheet scrolls. */
-.sheet #start-run {
+/* The sheet's main button stays in reach even when the sheet scrolls. */
+.sheet > .big-button:last-child {
   position: sticky;
   bottom: 6px;
   flex-shrink: 0;
-  box-shadow: 0 6px 0 #d4513d, 0 -14px 16px var(--paper);
+  box-shadow: 0 6px 0 #d4513d, 0 -10px 10px var(--paper);
 }
-.sheet #start-run:active { box-shadow: 0 2px 0 #d4513d, 0 -14px 16px var(--paper); }
+.sheet > .big-button:last-child:active { box-shadow: 0 2px 0 #d4513d, 0 -10px 10px var(--paper); }
+.sheet:not([hidden]) { animation: sheet-in 220ms cubic-bezier(0.23, 1, 0.32, 1); }
+@keyframes sheet-in { from { transform: translateY(16px); opacity: 0.6; } }
+.plan-result { display: grid; gap: 2px; min-height: 44px; align-content: center; }
+.plan-summary { margin: 0; font-weight: 700; color: var(--ink-soft); }
+.plan-summary b { font-family: var(--display); font-size: 24px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.plan-summary span { display: block; font-size: 14px; }
+/* Ready? holds more, and the map above it only needs to show the route. */
+#plan-ready { max-height: 74%; }
+.ready-head { display: grid; gap: 0; }
+.ready-head h3 { margin: 0; font-family: var(--display); font-weight: 800; font-size: 30px; line-height: 1.1; }
+.zones { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.zones button {
+  display: grid;
+  gap: 0;
+  justify-items: center;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  border-radius: 14px;
+  padding: 7px 4px;
+  color: var(--ink-soft);
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.zones b { font-family: var(--display); font-size: 18px; font-weight: 800; line-height: 1.2; }
+.zones span { font-weight: 800; font-size: 13px; font-variant-numeric: tabular-nums; }
+.zones button[aria-pressed='true'] { border-color: var(--coral); background: #ffe6de; color: var(--ink); }
+#zone-explain { line-height: 1.35; margin-bottom: 8px; }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--cream); padding: 4px; border-radius: 999px; }
 .segmented button { border: 0; border-radius: 999px; padding: 9px 10px; background: transparent; font-weight: 800; color: var(--ink-soft); }
 .segmented button[aria-pressed='true'] { background: var(--sun); color: var(--ink); }
@@ -267,6 +356,9 @@ button:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
 .chips button { border: 2px solid var(--line); background: var(--paper); border-radius: 999px; padding: 7px 13px; font-weight: 800; color: var(--ink-soft); }
 .chips button[aria-pressed='true'] { border-color: var(--coral); background: #ffe6de; color: var(--ink); }
 .chips .ghost { border-style: dashed; }
+#loop-options { flex-wrap: nowrap; }
+#loop-options [data-km] { flex: 1; padding-inline: 0; white-space: nowrap; }
+#loop-options .ghost { flex: 0 0 auto; width: 46px; padding-inline: 0; font-size: 18px; line-height: 1; }
 .hint { margin: 0; color: var(--ink-soft); font-weight: 700; font-size: 14px; }
 .hint.error { color: #c0392b; }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -490,5 +582,6 @@ button.stat { pointer-events: auto; }
   .card-button, .big-button, .soft-button { transition: none; }
   .buddy-pick button.picked .mini-bean { animation: none; }
   .bubble.pop span { animation: none; }
+  .sheet:not([hidden]), .place-panel { animation: none; }
   #score.bump { animation: none; }
 }

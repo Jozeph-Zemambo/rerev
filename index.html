@@ -75,9 +75,17 @@
       <div id="map"></div>
       <header class="planner-top">
         <button id="planner-back" class="round" type="button" aria-label="Back">←</button>
-        <h2>Plan your run</h2>
+        <form id="place-form" class="place-search" role="search">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 0 1 5.96 12.05l4.25 4.24a1 1 0 0 1-1.42 1.42l-4.24-4.25A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"/></svg>
+          <input id="place-query" type="search" placeholder="Where to?" aria-label="Where to?" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-controls="place-results" />
+          <button id="place-clear" type="button" aria-label="Clear search" hidden>×</button>
+        </form>
+        <div id="place-panel" class="place-panel" hidden>
+          <p id="place-note" class="place-note" aria-live="polite"></p>
+          <ul id="place-results" role="listbox" aria-label="Places"></ul>
+        </div>
       </header>
-      <div class="sheet">
+      <div id="plan-choose" class="sheet">
         <div class="segmented" role="group" aria-label="Route type">
           <button id="mode-loop" type="button" aria-pressed="true">Loop from here</button>
           <button id="mode-to" type="button" aria-pressed="false">To a spot</button>
@@ -87,27 +95,37 @@
           <button type="button" data-km="2" aria-pressed="true">2 km</button>
           <button type="button" data-km="3">3 km</button>
           <button type="button" data-km="5">5 km</button>
-          <button id="loop-shuffle" type="button" class="ghost" aria-label="Try another direction">↻ Shuffle</button>
+          <button id="loop-shuffle" type="button" class="ghost" aria-label="Shuffle: try another direction" title="Try another direction">↻</button>
         </div>
-        <p id="to-hint" class="hint" hidden>Tap the map where you want to run to.</p>
-        <div class="stats" aria-live="polite">
+        <div class="plan-result" aria-live="polite">
+          <p id="plan-summary" class="plan-summary" hidden></p>
+          <p id="plan-status" class="hint">Finding where you are…</p>
+        </div>
+        <button id="plan-next" class="big-button" type="button" disabled>Looks good</button>
+      </div>
+      <div id="plan-ready" class="sheet" hidden>
+        <div class="ready-head">
+          <h3>Ready?</h3>
+          <p id="ready-route" class="hint"></p>
+        </div>
+        <div class="stats">
           <div><span class="k">Distance</span><span id="plan-distance" class="v">–</span></div>
           <div><span class="k">Time</span><span id="plan-time" class="v">–</span></div>
           <div><span class="k">Climb</span><span id="plan-climb" class="v">–</span></div>
         </div>
-        <p id="plan-status" class="hint">Finding where you are…</p>
         <label class="field" for="pace">
           <span>Goal pace</span>
           <output id="pace-out" for="pace">6:30 /km</output>
         </label>
         <input id="pace" type="range" min="240" max="720" step="15" value="390" />
-        <div class="field"><span>Heart-rate zone</span></div>
-        <div id="zone-options" class="chips" role="group" aria-label="Heart-rate zone">
-          <button type="button" data-zone="110-140">Easy 110–140</button>
-          <button type="button" data-zone="130-160" aria-pressed="true">Steady 130–160</button>
-          <button type="button" data-zone="150-180">Push 150–180</button>
+        <div class="field"><span>Heart zone</span></div>
+        <div id="zone-options" class="zones" role="group" aria-label="Heart-rate zone">
+          <button type="button" data-zone="110-140" aria-label="Easy, 110 to 140 bpm"><b>Easy</b><span>110–140</span></button>
+          <button type="button" data-zone="130-160" aria-label="Steady, 130 to 160 bpm" aria-pressed="true"><b>Steady</b><span>130–160</span></button>
+          <button type="button" data-zone="150-180" aria-label="Push, 150 to 180 bpm"><b>Push</b><span>150–180</span></button>
         </div>
-        <button id="start-run" class="big-button" type="button" disabled>Start with Buddy</button>
+        <p id="zone-explain" class="hint zone-explain"></p>
+        <button id="start-run" class="big-button" type="button">Start</button>
       </div>
     </section>
 
