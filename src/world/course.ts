@@ -21,7 +21,7 @@ const CORNER_CUT = 0.2;
  * On an out-and-back each direction keeps this far to its own right, so the two legs don't sit
  * exactly on top of each other and the turnaround has a real (tight) radius.
  */
-export const KEEP_RIGHT = 0.15;
+export const KEEP_RIGHT = 0.05;
 /** A run repeats the course to about this distance. */
 const RUN_DISTANCE = 400;
 const MIN_LAPS = 2;
