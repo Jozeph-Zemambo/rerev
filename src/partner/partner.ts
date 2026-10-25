@@ -33,6 +33,11 @@ const BLIND_AHEAD = 0.5;
 const BLIND_AFTER = 3;
 const SEEN_MARGIN = 0.8;
 /**
+ * Short of something that may be about to become an obstacle (not confirmed, not ruled out), it
+ * waits this far back and looks, until that's settled one way or the other.
+ */
+const SUSPECT_SHORT = 0.5;
+/**
  * A blocked path has to stay clear this long before it sets off again: right at a hazard, noisy
  * depth can flick the block on and off a few times a second, and it shouldn't lurch with it.
  */
@@ -89,6 +94,8 @@ export class Partner {
   /** How long the path has been clear since it was last blocked. */
   private clearFor = 0;
   private onBreak = false;
+  /** Just picked up somewhere new (skipTo), not yet checked against what's ahead. */
+  private skipped = false;
   /** Index of the next turnaround still ahead, and how long is left of the pause at it. */
   private nextTurn = 0;
   private turnPause = 0;
@@ -136,6 +143,7 @@ export class Partner {
    */
   skipTo(s: number) {
     this.s = s;
+    this.skipped = true;
   }
 
   setBreak(onBreak: boolean) {
@@ -179,7 +187,17 @@ export class Partner {
       this.farSighted = this.farFor >= FAR_TIME;
     }
     const stalled = this.farSighted && runnerS - this.runnerAtEdge > EDGE_STALL;
-    const seenLimit = stalled || this.blindFor >= BLIND_AFTER ? seenUntil - SEEN_MARGIN : Infinity;
+    const suspectAt = this.path.status.suspectAtS;
+    const seenLimit = Math.min(
+      stalled || this.blindFor >= BLIND_AFTER ? seenUntil - SEEN_MARGIN : Infinity,
+      suspectAt === null ? Infinity : suspectAt - SUSPECT_SHORT,
+    );
+    if (this.skipped) {
+      // Picked up ahead of the runner: never on top of something blocking or suspect.
+      this.skipped = false;
+      const limit = Math.min(seenLimit, blockedAt === null ? Infinity : blockedAt - STOP_SHORT);
+      if (this.s > limit) this.s = Math.max(limit, Math.min(this.s, runnerS + 0.5));
+    }
     const lead = this.s - runnerS;
     // Waiting for a runner who's stopped carries on until they move again; for one far behind,
     // until they're back within maxLead.

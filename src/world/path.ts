@@ -41,9 +41,10 @@ const TREAD_LEVEL = 0.12;
  * keeps BODY_MARGIN more (a cell: what's flagged is often only part of the thing, field tests
  * had a bin's cells confirmed a few at a time) unless the only way through is a squeeze (a
  * doorway, or a gap between noise and a wall), and prefers more still where there's room: closer
- * than ROOMY costs a little, so it goes round on the side with more space. The first RUNNER_ROOM
- * ahead isn't held to any of that: it's where the runner already is, so whatever is flagged there
- * they're stepping past.
+ * than ROOMY costs a little, so it goes round on the side with more space. Cells that may be
+ * about to become obstacles count as a squeeze too. The first RUNNER_ROOM ahead isn't held to
+ * any of that: it's where the runner already is, so whatever is flagged there they're stepping
+ * past.
  */
 const BODY_HALF_WIDTH = 0.25;
 const BODY_MARGIN = 0.2;
@@ -92,6 +93,11 @@ export type PathStatus = {
   detouring: boolean;
   /** How far along the route the camera has actually seen the ground. */
   seenUntilS: number;
+  /**
+   * Where along the route the buddy would reach something that may be about to become an
+   * obstacle (not confirmed, not ruled out), or null.
+   */
+  suspectAtS: number | null;
 };
 
 export type RoutePoint = { x: number; z: number };
@@ -107,7 +113,7 @@ export type StairSpan = { fromS: number; toS: number; fromY: number; toY: number
 export class Path {
   readonly group = new THREE.Group();
   length = 0;
-  readonly status: PathStatus = { blockedAtS: null, blockReason: null, detouring: false, seenUntilS: 0 };
+  readonly status: PathStatus = { blockedAtS: null, blockReason: null, detouring: false, seenUntilS: 0, suspectAtS: null };
   /** Dashes are drawn this far ahead of the runner. Shorter than a lap on courses, so laps don't stack. */
   drawAhead = DRAW_AHEAD;
   /** Staircases found along this route. Kept when the route is only re-anchored. */
@@ -145,6 +151,9 @@ export class Path {
   private readonly color = new THREE.Color();
   private readonly hidden = new THREE.Matrix4().makeScale(0, 0, 0);
   private readonly hazardScratch: HazardCell[] = [];
+  private readonly suspectScratch: { x: number; z: number }[] = [];
+  /** The hazards around the line ahead, as of the last plan. */
+  private room: Room | null = null;
 
   constructor() {
     const geometry = new THREE.PlaneGeometry(0.09, 0.15).rotateX(-Math.PI / 2);
@@ -186,6 +195,8 @@ export class Path {
     this.status.blockedAtS = null;
     this.status.blockReason = null;
     this.status.detouring = false;
+    this.status.suspectAtS = null;
+    this.room = null;
     // A re-anchored route keeps its progress; distances along it haven't changed.
     if (!reanchor) {
       this.lastProjected = 0;
@@ -412,6 +423,7 @@ export class Path {
       this.replan = false;
       this.planDetours(runnerS, map, now);
       this.status.seenUntilS = this.seenUntil(runnerS, map);
+      this.status.suspectAtS = this.suspectAhead(runnerS);
     }
     const ease = Math.min(1, dt * 2.5);
     for (let i = i0; i <= i1; i++) this.offset[i] += (this.offsetTarget[i] - this.offset[i]) * ease;
@@ -465,6 +477,24 @@ export class Path {
   }
 
   /**
+   * Where, ahead of the runner, the displayed line first brings the buddy's body (and its
+   * margin) up to a suspect cell, one that may be about to become an obstacle; or null. It isn't
+   * known to be clear yet, and by the time it's confirmed a buddy a couple of metres ahead would
+   * be in it.
+   */
+  private suspectAhead(runnerS: number): number | null {
+    if (!this.room) return null;
+    const from = this.index(runnerS + RUNNER_ROOM);
+    const to = this.index(runnerS + HAZARD_AHEAD);
+    for (let i = from; i <= to; i++) {
+      const x = this.xs[i] + this.nx[i] * this.offset[i];
+      const z = this.zs[i] + this.nz[i] * this.offset[i];
+      if (this.room.clearance(x, z, SUSPECT) < BODY_HALF_WIDTH + BODY_MARGIN) return i * STEP;
+    }
+    return null;
+  }
+
+  /**
    * Walk forward from the runner along the displayed line until the ground is unknown. Short
    * unseen gaps (a missed cell or two) are tolerated; a 40 cm gap ends the seen stretch.
    */
@@ -509,6 +539,7 @@ export class Path {
     this.status.detouring = false;
     this.findStairs(a, b, map, now);
     const room = this.roomAround(a, e, map, now);
+    this.room = room;
 
     // Best line through the sideways positions (LATERAL_STEP apart), sample by sample: as little
     // to the side as possible, roomy where there's room, steady, and like the last plan.
@@ -533,6 +564,8 @@ export class Path {
           if (clear < BODY_HALF_WIDTH) continue;
           if (clear < margin) here += SQUEEZED * ((margin - clear) / BODY_MARGIN) ** 2;
           if (clear < ROOMY) here += CRAMPED * ((ROOMY - Math.max(clear, margin)) / (ROOMY - margin)) ** 2;
+          const suspect = room.clearance(this.xs[i] + this.nx[i] * side, this.zs[i] + this.nz[i] * side, SUSPECT);
+          if (suspect < margin) here += SQUEEZED * Math.min(1, (margin - suspect) / BODY_MARGIN) ** 2;
         }
         let best = k === 0 ? 0 : Infinity;
         let bestFrom = 0;
@@ -626,9 +659,10 @@ export class Path {
     const pad = DETOUR_MAX + ROOMY + CELL_SIZE;
     const radius = Math.max(x1 - x0, z1 - z0) / 2 + pad;
     const room = new Room((x0 + x1) / 2, (z0 + z1) / 2, radius);
-    for (const cell of map.hazardCells((x0 + x1) / 2, (z0 + z1) / 2, radius, now, this.hazardScratch)) {
+    for (const cell of map.hazardCells((x0 + x1) / 2, (z0 + z1) / 2, radius, now, this.hazardScratch, this.suspectScratch)) {
       room.add(cell.x, cell.z, cell.kind === 'obstacle' ? OBSTACLE : DROP);
     }
+    for (const cell of this.suspectScratch) room.add(cell.x, cell.z, SUSPECT);
     for (const span of this.stairs) {
       for (let i = this.index(span.fromS); i <= this.index(span.toS); i++) {
         if (i < a || i > e) continue;
@@ -751,6 +785,8 @@ const unitScale = new THREE.Vector3(1, 1, 1);
 const NO_HAZARD = 0;
 const OBSTACLE = 1;
 const DROP = 2;
+/** Not a hazard yet, but may be about to become an obstacle (see SurfaceMap.hazardCells). */
+const SUSPECT = 4;
 /** Clearance is looked for this many cells out (anything further is roomy enough). */
 const REACH = Math.ceil(ROOMY / CELL_SIZE) + 1;
 

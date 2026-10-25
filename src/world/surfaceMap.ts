@@ -82,6 +82,16 @@ const CLOSE_RANGE = 1.2;
 const KEEP_SHARE = 0.3;
 const REMEMBER = 15;
 /**
+ * A cell is a suspect while its obstacle readings are piling up without (yet) making an obstacle:
+ * from at least SUSPECT_FRAMES frames, SUSPECT_SHARE of what it saw, the latest within
+ * SUSPECT_FOR seconds. Confirming takes a second or so, and by then a buddy a couple of metres
+ * ahead is already there (field test: three bins and a door frame were all confirmed only once
+ * the buddy had reached them), so it doesn't run into a suspect until that's settled.
+ */
+const SUSPECT_FRAMES = 2;
+const SUSPECT_SHARE = 0.35;
+const SUSPECT_FOR = 0.5;
+/**
  * A floor detection on a cell, at its ground height, is bare floor seen there: it counts as
  * HIT_GROUND of ground evidence, and rules out a drop for HIT_VETO seconds. It can't rule out an
  * obstacle outright: the phone's floor planes reach under things standing on the floor.
@@ -186,6 +196,9 @@ export const DEFAULT_TUNING = {
   closeRange: CLOSE_RANGE,
   keepShare: KEEP_SHARE,
   remember: REMEMBER,
+  suspectFrames: SUSPECT_FRAMES,
+  suspectShare: SUSPECT_SHARE,
+  suspectFor: SUSPECT_FOR,
   hitGround: HIT_GROUND,
   hitVeto: HIT_VETO,
   hitRecent: HIT_RECENT,
@@ -743,10 +756,14 @@ export class SurfaceMap {
     return found;
   }
 
-  /** Flagged cells near a point, for drawing markers on the floor. */
-  hazardCells(x: number, z: number, radius: number, now: number, out: HazardCell[]): HazardCell[] {
+  /**
+   * Flagged cells near a point, for drawing markers on the floor. With `suspects`, cells that
+   * may be about to become obstacles (see SUSPECT_FRAMES) are added to it.
+   */
+  hazardCells(x: number, z: number, radius: number, now: number, out: HazardCell[], suspects?: { x: number; z: number }[]): HazardCell[] {
     this.flush();
     out.length = 0;
+    if (suspects) suspects.length = 0;
     const r = Math.ceil(radius / CELL_SIZE);
     const cx = cellIndex(x);
     const cz = cellIndex(z);
@@ -756,11 +773,16 @@ export class SurfaceMap {
         if (!cell) continue;
         const kind: Hazard | null = this.isObstacle(cell, now) ? 'obstacle' : this.isDrop(cell, now) ? 'drop' : null;
         if (kind) out.push({ x: (cx + dx + 0.5) * CELL_SIZE, z: (cz + dz + 0.5) * CELL_SIZE, y: cell.ground + this.drift, kind });
+        else if (suspects && this.isSuspect(cell, now)) suspects.push({ x: (cx + dx + 0.5) * CELL_SIZE, z: (cz + dz + 0.5) * CELL_SIZE });
       }
     }
     return out;
   }
 
+  private isSuspect(cell: Cell, now: number) {
+    const t = this.tuning;
+    return now - cell.obstacleAt < t.suspectFor && cell.obstacleFrames >= t.suspectFrames && cell.seenObstacle >= t.suspectShare * this.evidence(cell);
+  }
 
   private voteRebase(x: number, y: number, z: number, now: number) {
     const t = this.tuning;
