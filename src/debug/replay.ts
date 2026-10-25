@@ -555,6 +555,8 @@ class Replayer {
       this.reportedDrift = 0;
     }
     map.walkableStep = this.options.walkableStep ?? data.walkableStep;
+    // As the app: a course is run as walked, with no obstacle checks.
+    this.path.trustRoute = mode === 'course';
     this.partner.turnarounds = data.turnarounds ?? [];
     for (const [x, z] of data.seeds ?? []) map.seedGround(x, data.floorY, z, 1);
     this.path.setRoute(points, data.floorY);
