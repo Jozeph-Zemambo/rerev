@@ -23,6 +23,11 @@ const STOP_SHORT = 1.2;
 const BLIND_AHEAD = 0.5;
 const BLIND_AFTER = 3;
 const SEEN_MARGIN = 0.5;
+/**
+ * A blocked path has to stay clear this long before it sets off again: right at a hazard, noisy
+ * depth can flick the block on and off a few times a second, and it shouldn't lurch with it.
+ */
+const CLEAR_HOLD = 0.6;
 /** Waits for a runner who's this far beyond maxLead behind, even if they're still moving. */
 const FAR_BEHIND = 1.5;
 /** How quickly its speed follows the target (per second): about a third of a second to settle. */
@@ -66,6 +71,8 @@ export class Partner {
   private speed = 0;
   /** How long the camera has seen no ground ahead of the runner. */
   private blindFor = 0;
+  /** How long the path has been clear since it was last blocked. */
+  private clearFor = 0;
   private onBreak = false;
   /** Index of the next turnaround still ahead, and how long is left of the pause at it. */
   private nextTurn = 0;
@@ -95,6 +102,7 @@ export class Partner {
     this.state = 'run';
     this.speed = 0;
     this.blindFor = 0;
+    this.clearFor = 0;
     this.runner.reset(runnerS);
     this.onBreak = false;
     this.turnPause = 0;
@@ -151,9 +159,13 @@ export class Partner {
     // until they're back within maxLead.
     const waitFor = runner.stopped || lead > this.maxLead + (this.state === 'wait' ? 0 : FAR_BEHIND);
 
+    const blockedHere = blockedAt !== null && blockedAt - this.s < STOP_SHORT + 0.05;
+    this.clearFor = blockedHere ? 0 : this.clearFor + dt;
+    const stillBlocked = this.state === 'blocked' && this.clearFor < CLEAR_HOLD;
+
     if (this.s >= end) this.state = 'done';
     else if (this.onBreak) this.state = 'break';
-    else if (blockedAt !== null && blockedAt - this.s < STOP_SHORT + 0.05) this.state = 'blocked';
+    else if (blockedHere || stillBlocked) this.state = 'blocked';
     else if (turning) this.state = 'turn';
     else if (waitFor) this.state = 'wait';
     else if (this.path.onStairs(this.s + 0.3)) this.state = 'stairs';
@@ -196,6 +208,7 @@ export class Partner {
     // Never run past a turnaround without turning at it.
     if (this.nextTurn < this.turnarounds.length) next = Math.min(next, this.turnarounds[this.nextTurn]);
     if (blockedAt !== null) next = Math.min(next, Math.max(this.s, blockedAt - STOP_SHORT));
+    if (this.state === 'blocked') next = this.s;
     next = Math.min(next, Math.max(this.s, seenLimit), end);
     // Held back by a limit, it goes no faster than the limit lets it (so the legs match).
     if (dt > 0 && next < this.s + this.speed * dt) this.speed = Math.max(0, (next - this.s) / dt);
