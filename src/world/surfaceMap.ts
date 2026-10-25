@@ -91,14 +91,19 @@ const HIT_VETO = 1;
 /**
  * Where the floor detection saw bare floor in the last HIT_RECENT seconds, depth should read the
  * floor too. Walking often sinks or lifts the whole depth image (field tests: 10-70 cm for
- * seconds at a time), which scattered noise doesn't do: so if the points landing there (at least
- * QUALITY_POINTS) sit, by their median, more than SHIFT_OK off the floor, the frame counts for
- * less, and for nothing from SHIFT_BAD.
+ * seconds at a time; on one 4-minute hallway walk over half the frames sat 16 cm+ low), which
+ * scattered noise doesn't do. So when at least QUALITY_POINTS land there, their median says how
+ * far this frame is off, and out to as far as those points reach (their 90th percentile, plus
+ * CORRECT_BEYOND), the frame is measured from the floor it shows rather than the one it should,
+ * and counts in full. Further out the offset changes with distance (field tests: correcting half
+ * a metre further flagged whole patches of an empty hallway), so points there count for less the
+ * further the frame was off (SHIFT_OK), and for nothing from SHIFT_BAD.
  */
 const HIT_RECENT = 0.5;
 const QUALITY_POINTS = 20;
 const SHIFT_OK = 0.06;
 const SHIFT_BAD = 0.16;
+const CORRECT_BEYOND = 0;
 /** How far (in cells) to look for known ground when a cell has none of its own. */
 const REFERENCE_RINGS = 7;
 /**
@@ -187,6 +192,7 @@ export const DEFAULT_TUNING = {
   qualityPoints: QUALITY_POINTS,
   shiftOk: SHIFT_OK,
   shiftBad: SHIFT_BAD,
+  correctBeyond: CORRECT_BEYOND,
   referenceRings: REFERENCE_RINGS,
   noiseFrom: NOISE_FROM,
   noisePerMetre: NOISE_PER_METRE,
@@ -245,6 +251,8 @@ type Cell = {
   frameObstacle: number;
   frameDrop: number;
   frameRange: number;
+  /** How much this frame counts here (see SHIFT_OK). */
+  frameWeight: number;
   pending: boolean;
   /** Upper envelope of obstacle points in this cell (before drift correction), e.g. a stair tread. */
   top: number;
@@ -281,13 +289,20 @@ export class SurfaceMap {
   private pendingAt = -Infinity;
   /** Where the phone was for the frame being added, if the caller said. */
   private frameCamera: { x: number; z: number } | null = null;
-  /** How much the frame being added counts (see SHIFT_OK); 1 for points added one by one. */
+  /**
+   * How far the frame being added sits off the floor and out to what range that's known (see
+   * CORRECT_BEYOND), and how much its points beyond that count (see SHIFT_OK). 0, 0 and 1 for
+   * points added one by one.
+   */
+  private frameShift = 0;
+  private frameShiftTo = 0;
   private frameWeight = 1;
   /** How much the last depth frame counted, 0-1 (field testing). */
   lastFrameQuality = 1;
   private readonly residuals: number[] = [];
   private recentRebases: { cell: Cell; shift: number; at: number }[] = [];
   private readonly shifts: number[] = [];
+  private readonly shiftRanges: number[] = [];
   /** Thresholds in use: the defaults, unless an experiment overrides some. */
   readonly tuning: SurfaceTuning;
 
@@ -453,7 +468,8 @@ export class SurfaceMap {
     const t = this.tuning;
     const near: number[] = [];
     const onFloorHits = this.shifts;
-    onFloorHits.length = 0;
+    const hitRanges = this.shiftRanges;
+    onFloorHits.length = hitRanges.length = 0;
     for (const p of points) {
       const cell = this.cells.get(keyOf(cellIndex(p.x), cellIndex(p.z)));
       const recentHit = cell !== undefined && now - cell.floorHitAt <= t.hitRecent;
@@ -461,13 +477,20 @@ export class SurfaceMap {
       const reference = this.referenceGround(p.x, p.z, camera);
       if (reference === null) continue;
       if (p.d < t.nearRange) near.push(p.y - reference);
-      if (recentHit) onFloorHits.push(p.y - reference);
+      if (recentHit) {
+        onFloorHits.push(p.y - reference);
+        hitRanges.push(p.d);
+      }
     }
     let quality = 1;
+    let shift = 0;
+    let shiftTo = 0;
     if (onFloorHits.length >= t.qualityPoints) {
       onFloorHits.sort((a, b) => a - b);
-      const shift = Math.abs(onFloorHits[onFloorHits.length >> 1]);
-      quality = Math.min(1, Math.max(0, (t.shiftBad - shift) / (t.shiftBad - t.shiftOk)));
+      hitRanges.sort((a, b) => a - b);
+      shift = onFloorHits[onFloorHits.length >> 1];
+      shiftTo = hitRanges[Math.floor(hitRanges.length * 0.9)] + t.correctBeyond;
+      quality = Math.min(1, Math.max(0, (t.shiftBad - Math.abs(shift)) / (t.shiftBad - t.shiftOk)));
     }
     this.lastFrameQuality = quality;
     near.sort((a, b) => a - b);
@@ -476,10 +499,13 @@ export class SurfaceMap {
     if (!dropsTrusted) this.distrustedFrames++;
     this.flush();
     this.frameCamera = camera ?? null;
+    this.frameShift = shift;
+    this.frameShiftTo = shiftTo;
     this.frameWeight = quality;
     for (const p of points) this.addDepthPoint(p.x, p.y, p.z, now, p.d, dropsTrusted);
     this.flush();
     this.frameCamera = null;
+    this.frameShift = this.frameShiftTo = 0;
     this.frameWeight = 1;
   }
 
@@ -495,6 +521,10 @@ export class SurfaceMap {
     if (now !== this.pendingAt) this.flush();
     this.pendingAt = now;
     if (!Number.isFinite(x + y + z)) return;
+    // Within reach of this frame's floor detections, measured from the floor it shows (see CORRECT_BEYOND).
+    const corrected = range <= this.frameShiftTo;
+    if (corrected) y -= this.frameShift;
+    const frameWeight = corrected ? 1 : this.frameWeight;
     const reference = this.referenceGround(x, z, this.frameCamera);
     if (reference === null) return;
     const height = y - reference;
@@ -516,11 +546,12 @@ export class SurfaceMap {
     if (isObstacle && cell.obstacle) cell.obstacleAt = Math.max(cell.obstacleAt, now);
     if (range >= t.hazardRange || Math.abs(height) > t.dropMax) return;
     const countsAsDrop = isDrop && range <= t.dropRange;
-    const weight = this.weightAt(range, isObstacle || countsAsDrop) * this.frameWeight;
+    const weight = this.weightAt(range, isObstacle || countsAsDrop) * frameWeight;
     if (weight <= 0) return;
     if (!cell.pending) {
       cell.pending = true;
       cell.frameRange = range;
+      cell.frameWeight = frameWeight;
       this.pending.push(cell);
     }
     // Anything that isn't an obstacle or a drop reading counts against both.
@@ -590,12 +621,12 @@ export class SurfaceMap {
       cell.dropSpread = 0;
     }
     if (o > 0 && o >= g + d) {
-      cell.obstacleFrames += this.frameWeight;
+      cell.obstacleFrames += cell.frameWeight;
       cell.obstacleSpread = this.spread(cell.obstacleFrom, cell.obstacleNear === Infinity, cell.frameRange, cell.obstacleSpread);
       cell.obstacleNear = Math.min(cell.obstacleNear, cell.frameRange);
     }
     if (d > 0 && d >= g + o) {
-      cell.dropFrames += this.frameWeight;
+      cell.dropFrames += cell.frameWeight;
       cell.dropSpread = this.spread(cell.dropFrom, cell.dropNear === Infinity, cell.frameRange, cell.dropSpread);
       cell.dropNear = Math.min(cell.dropNear, cell.frameRange);
     }
@@ -730,6 +761,7 @@ export class SurfaceMap {
     return out;
   }
 
+
   private voteRebase(x: number, y: number, z: number, now: number) {
     const t = this.tuning;
     const time = Number.isFinite(now) ? now : performance.now() / 1000;
@@ -811,6 +843,7 @@ export class SurfaceMap {
         frameObstacle: 0,
         frameDrop: 0,
         frameRange: 0,
+        frameWeight: 1,
         obstacleNear: Infinity,
         obstacleSpread: 0,
         obstacleFrom: { x: NaN, z: NaN, range: 0 },
