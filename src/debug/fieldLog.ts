@@ -12,7 +12,10 @@ const HALF_BINS = 20;
 const RANGE_BANDS = [2, 3.5, Infinity];
 const VERDICTS: DepthVerdict[] = ['ground', 'obstacle', 'drop', 'between', 'out of range', 'no ground'];
 
-type Band = { verdicts: Record<string, number>; hist: number[] };
+type Band = { verdicts: Record<string, number>; hist: number[]; ratio: number[] };
+/** Depth-over-floor ratios are binned in 2.5% steps from 0.5 to 1.5. */
+const RATIO_STEP = 0.025;
+const RATIO_BINS = 40;
 type Entry = { t: number; kind: string; data: unknown };
 
 /**
@@ -48,6 +51,12 @@ export class FieldLog implements SurfaceProbe {
     const band = this.bands[RANGE_BANDS.findIndex(limit => range < limit)];
     band.verdicts[verdict]++;
     if (Number.isFinite(height)) band.hist[binOf(height)]++;
+  }
+
+  ratio(ratio: number, range: number) {
+    const band = this.bands[RANGE_BANDS.findIndex(limit => range < limit)];
+    const bin = ratio < 0.5 ? 0 : ratio >= 1.5 ? RATIO_BINS + 1 : Math.floor((ratio - 0.5) / RATIO_STEP) + 1;
+    band.ratio[bin]++;
   }
 
   ground(diff: number | null, accepted: boolean, weight: number) {
@@ -107,6 +116,7 @@ export class FieldLog implements SurfaceProbe {
     this.bands = RANGE_BANDS.map(() => ({
       verdicts: Object.fromEntries(VERDICTS.map(verdict => [verdict, 0])),
       hist: new Array(HALF_BINS * 2 + 2).fill(0),
+      ratio: new Array(RATIO_BINS + 2).fill(0),
     }));
     this.groundStats = { accepted: 0, rejected: 0, unknown: 0, hist: new Array(HALF_BINS * 2 + 2).fill(0) };
   }
@@ -122,6 +132,8 @@ export function summaryRows(last: NonNullable<FieldLog['last']>): [string, strin
     const pct = (n: number) => `${Math.round((100 * n) / judged)}%`;
     return [names[i], `gnd ${pct(v.ground)} drop ${pct(v.drop)} obs ${pct(v.obstacle)} mid ${cm(medianOf(band.hist))}`];
   });
+  const ratios = last.bands.map(band => ratioMedian(band.ratio));
+  if (ratios.some(r => r !== null)) rows.push(['depth/floor', ratios.map(r => (r === null ? '–' : `×${r.toFixed(2)}`)).join('  ') + ' (1.00 = right)']);
   const g = last.ground;
   const total = g.accepted + g.rejected;
   rows.push(['floor hits', total === 0 ? `${g.unknown}, no ground known yet` : `${g.accepted}/${total} agree, typ. off ${cm(medianOf(g.hist))}`]);
@@ -132,6 +144,17 @@ function cm(metres: number | null) {
   if (metres === null) return '–';
   const value = Math.round(metres * 100);
   return `${value > 0 ? '+' : ''}${value} cm`;
+}
+
+function ratioMedian(hist: number[]): number | null {
+  const total = hist.reduce((a, b) => a + b, 0);
+  if (total === 0) return null;
+  let seen = 0;
+  for (let i = 0; i < hist.length; i++) {
+    seen += hist[i];
+    if (seen >= total / 2) return i === 0 ? 0.5 : i === hist.length - 1 ? 1.5 : 0.5 + (i - 0.5) * RATIO_STEP;
+  }
+  return null;
 }
 
 /** Median of a binned histogram (centre of the median bin), or null if empty. */

@@ -489,7 +489,7 @@ function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], 
     phone: phone.toArray().map(r3),
     // Standing upright this is ~1.3-1.5 m; much less means the floor was found too high.
     phoneAboveFloor: r3(phone.y - floorY),
-    lowered: map.lowered,
+    rebased: map.rebased,
     walkableStep: map.walkableStep,
     pathLength: r3(points.length),
   });
@@ -1118,7 +1118,9 @@ function diagnosticRows(runnerS: number, trackingLost: boolean): [string, string
     rows.push(
       ['phone', `${phoneAboveFloor === null ? '?' : phoneAboveFloor.toFixed(2)} m over tapped floor (~1.4 ok)`],
       ...(field.last ? summaryRows(field.last) : []),
-      ['lowered', `${map.lowered} cells moved down to floor hits`],
+      ['re-based', `${map.rebased} cells moved to floor hits`],
+      ['distrust', `${map.distrustedFrames} depth frames ignored for drops`],
+      ['frames', `${depthSensor.frames} depth, ${depthSensor.unchanged} unchanged`],
       ['hazards', `${cells.filter(c => c.kind === 'obstacle').length} obstacle, ${cells.filter(c => c.kind === 'drop').length} drop cells (6 m)`],
       ['blocked', path.status.blockedAtS === null ? 'no' : `${path.status.blockReason} at +${(path.status.blockedAtS - runnerS).toFixed(1)} m`],
       ['log', `${field.session} · ${field.sent} sent${field.failed ? ` · ${field.failed} failed` : ''}`],
@@ -1155,10 +1157,13 @@ function fieldSnapshot(now: number, runnerS: number, trackingLost: boolean): Rec
     hazards: cells.slice(0, 40).map(c => [r3(c.x), r3(c.z), r3(c.y), c.kind === 'drop' ? 'D' : 'O']),
     hazardCounts: { obstacle: cells.filter(c => c.kind === 'obstacle').length, drop: cells.filter(c => c.kind === 'drop').length },
     depthPoints,
+    depthFrames: depthSensor.frames,
+    depthUnchanged: depthSensor.unchanged,
+    distrustedFrames: map.distrustedFrames,
     rayHits,
     walkableStep: map.walkableStep,
     mapCells: map.size,
-    lowered: map.lowered,
+    rebased: map.rebased,
     gps: gps.latest ? { accuracy: gps.latest.accuracy } : null,
   };
 }
