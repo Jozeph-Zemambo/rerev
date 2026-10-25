@@ -96,10 +96,19 @@ export class RunnerSpeed {
   /** True from the start until the runner first moves, and whenever they've stood still a moment. */
   stopped = true;
 
+  /**
+   * The speed to pace them at: the smoothed speed, except just after they set off, when the
+   * long average still remembers them standing and would leave them catching the buddy up.
+   */
+  get pace() {
+    return this.sinceGo < SPEED_WINDOW ? Math.max(this.speed, this.recent) : this.speed;
+  }
+
   private time = 0;
   private distance = 0;
   private lastS: number | null = null;
   private slowFor = 0;
+  private sinceGo = Infinity;
   /** (time, distance travelled) samples, oldest first. */
   private samples: { t: number; d: number }[] = [];
 
@@ -111,6 +120,7 @@ export class RunnerSpeed {
     this.distance = 0;
     this.lastS = runnerS;
     this.slowFor = 0;
+    this.sinceGo = Infinity;
     this.samples = [{ t: 0, d: 0 }];
   }
 
@@ -126,10 +136,12 @@ export class RunnerSpeed {
 
     this.speed = this.averageOver(SPEED_WINDOW);
     this.recent = this.averageOver(STOP_WINDOW);
+    this.sinceGo += dt;
     if (this.stopped) {
       if (this.recent > GO_ABOVE) {
         this.stopped = false;
         this.slowFor = 0;
+        this.sinceGo = 0;
       }
     } else {
       this.slowFor = this.recent < STOP_BELOW ? this.slowFor + dt : 0;

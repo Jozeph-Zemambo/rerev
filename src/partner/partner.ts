@@ -179,7 +179,7 @@ export class Partner {
     let target = moving
       ? paceTarget({
           mode: this.pacing,
-          runnerSpeed: runner.speed,
+          runnerSpeed: runner.pace,
           lead,
           targetLead: this.targetLead,
           maxLead: this.maxLead,

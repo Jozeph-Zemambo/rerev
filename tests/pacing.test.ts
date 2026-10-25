@@ -66,7 +66,9 @@ test('when the runner stops, the buddy eases to a stop and waits; when they go, 
   for (let i = 1; i < samples.length; i++) {
     assert.ok(Math.abs(samples[i].speed - samples[i - 1].speed) < 0.1, `speed jumped at ${samples[i].t.toFixed(2)} s`);
   }
-  assert.ok(between(samples, 16, 26).every(s => s.lead > 0.9), 'the runner never catches it');
+  // It picks up their pace within about half a second, so they don't close on it much either.
+  const closest = Math.min(...between(samples, 16, 26).map(s => s.lead));
+  assert.ok(closest > 1.85, `the runner closed to ${closest.toFixed(2)} m`);
   assert.ok(between(samples, 22, 26).every(s => Math.abs(s.lead - 2) < 0.35), 'and it settles back to 2 m');
   assert.equal(switches(samples), 3, 'wait → run → wait → run');
 });
