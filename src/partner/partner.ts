@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import type { Path } from '../world/path';
 import type { Gait } from './buddyMotion';
+import { paceTarget, RunnerSpeed, type PacingMode } from './pacing';
 
 export type PartnerState = 'run' | 'stairs' | 'look' | 'turn' | 'wait' | 'break' | 'blocked' | 'done';
 
-/** On stairs the buddy slows to a careful walk at this fraction of the goal pace. */
+/** On stairs a pacer slows to a careful walk at this fraction of the goal pace. */
 const STAIRS_PACE = 0.45;
 
 const START_LEAD = 1.5;
@@ -14,6 +15,11 @@ const MAX_PACE = 4;
 const STOP_SHORT = 1.2;
 /** Never runs closer than this to ground the camera has not seen yet. */
 const SEEN_MARGIN = 0.5;
+/** Waits for a runner who's this far beyond maxLead behind, even if they're still moving. */
+const FAR_BEHIND = 1.5;
+/** How quickly its speed follows the target (per second): about a third of a second to settle. */
+const SPEED_RATE = 3;
+
 /**
  * Turning round at the end of an out-and-back: brake steadily over the last TURN_SLOW metres
  * down to TURN_SPEED, jog on the spot for at least TURN_PAUSE seconds while turning, then pick
@@ -26,9 +32,9 @@ const TURN_PAUSE = 0.4;
 const TURN_WAIT = 1.5;
 
 /**
- * Paces itself against the runner: stays a couple of metres ahead, jogs on the spot if it
- * gets too far in front, stops for breaks on request, and stops short of anything blocking
- * the path. Slows on uphills.
+ * Paces itself against the runner (see pacing.ts): stays a couple of metres ahead at their own
+ * speed, or at the goal pace on a planned route, and jogs on the spot once they stop. Stops for
+ * breaks on request, and short of anything blocking the path. Slows on uphills and stairs.
  */
 export class Partner {
   s = START_LEAD;
@@ -39,11 +45,15 @@ export class Partner {
   effort = 1;
   targetLead = 2;
   maxLead = 4.5;
+  /** 'goal' paces a planned route at goalPace; 'match' (Quick start, courses) goes the runner's speed. */
+  pacing: PacingMode = 'match';
   /**
    * Outdoors on a planned route the ground just ahead of you is the pavement you're on, so the
    * buddy may keep its usual lead even before the camera has seen it. Indoors it stays strict.
    */
   trustGroundAhead = false;
+  /** The runner's speed along the path, smoothed. */
+  readonly runner = new RunnerSpeed();
   /**
    * Distances along the path where it doubles back on itself (out-and-back turnarounds),
    * ascending. Set before `reset`.
@@ -79,6 +89,7 @@ export class Partner {
     this.s = runnerS + START_LEAD;
     this.state = 'run';
     this.speed = 0;
+    this.runner.reset(runnerS);
     this.onBreak = false;
     this.turnPause = 0;
     this.turnStarted = false;
@@ -113,6 +124,8 @@ export class Partner {
 
   update(dt: number, runnerS: number) {
     const end = this.path.length - 0.3;
+    const runner = this.runner;
+    runner.update(dt, runnerS);
     const turnAt = this.turnaroundAhead;
     const atTurn = this.s >= turnAt - 0.001;
     if (atTurn && !this.turnStarted) {
@@ -126,12 +139,15 @@ export class Partner {
     const seen = this.path.status.seenUntilS - SEEN_MARGIN;
     const seenLimit = this.trustGroundAhead ? Math.max(seen, runnerS + this.maxLead + 0.5) : seen;
     const lead = this.s - runnerS;
+    // Waiting for a runner who's stopped carries on until they move again; for one far behind,
+    // until they're back within maxLead.
+    const waitFor = runner.stopped || lead > this.maxLead + (this.state === 'wait' ? 0 : FAR_BEHIND);
 
     if (this.s >= end) this.state = 'done';
     else if (this.onBreak) this.state = 'break';
     else if (blockedAt !== null && blockedAt - this.s < STOP_SHORT + 0.05) this.state = 'blocked';
     else if (turning) this.state = 'turn';
-    else if (this.state === 'wait' ? lead > this.targetLead : lead > this.maxLead) this.state = 'wait';
+    else if (waitFor) this.state = 'wait';
     else if (this.path.onStairs(this.s + 0.3)) this.state = 'stairs';
     else if (this.s >= seenLimit - 0.05) this.state = 'look';
     else this.state = 'run';
@@ -139,11 +155,22 @@ export class Partner {
     // Uphill costs pace (about 3% per 1% of grade, capped), downhill gives a little back.
     const grade = this.path.ready ? this.path.gradeAt(this.s) : 0;
     const hill = THREE.MathUtils.clamp(1 - grade * 3, 0.6, 1.1);
-    // If you catch up, it picks up the pace a little so it stays your partner, not your shadow.
-    const moving = this.state === 'run' || this.state === 'look';
-    const target =
-      this.state === 'stairs' ? this.goalPace * STAIRS_PACE : moving ? this.goalPace * this.effort * hill * (lead < 1 ? 1.25 : 1) : 0;
-    this.speed += (target - this.speed) * Math.min(1, dt * 3);
+    const moving = this.state === 'run' || this.state === 'look' || this.state === 'stairs';
+    let target = moving
+      ? paceTarget({
+          mode: this.pacing,
+          runnerSpeed: runner.speed,
+          lead,
+          targetLead: this.targetLead,
+          maxLead: this.maxLead,
+          goalPace: this.goalPace,
+          effort: this.effort,
+          hill,
+        })
+      : 0;
+    // A pacer takes stairs carefully; matching, the runner's own speed on them already does.
+    if (this.state === 'stairs' && this.pacing === 'goal') target = Math.min(target, this.goalPace * STAIRS_PACE);
+    this.speed += (target - this.speed) * Math.min(1, dt * SPEED_RATE);
     if (this.state === 'turn') {
       this.speed = 0;
       this.turnPause -= dt;
@@ -161,7 +188,9 @@ export class Partner {
     // Never run past a turnaround without turning at it.
     if (this.nextTurn < this.turnarounds.length) next = Math.min(next, this.turnarounds[this.nextTurn]);
     if (blockedAt !== null) next = Math.min(next, Math.max(this.s, blockedAt - STOP_SHORT));
-    next = Math.min(next, Math.max(this.s, seenLimit));
-    this.s = Math.min(end, next);
+    next = Math.min(next, Math.max(this.s, seenLimit), end);
+    // Held back by a limit, it goes no faster than the limit lets it (so the legs match).
+    if (dt > 0 && next < this.s + this.speed * dt) this.speed = Math.max(0, (next - this.s) / dt);
+    this.s = next;
   }
 }

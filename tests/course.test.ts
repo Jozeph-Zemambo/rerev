@@ -201,44 +201,55 @@ test('the buddy brakes into a turnaround, turns on the spot, then picks up again
   assert.ok(speedAt.get('after 2.5')! > 1.8, `back up to pace after, got ${speedAt.get('after 2.5')!.toFixed(2)}`);
 });
 
-test('at a turnaround the buddy waits for a slower runner instead of running back past them', () => {
-  const { path, turn } = straightOutAndBack();
-  const partner = new Partner(path);
-  partner.goalPace = 2.5;
-  partner.turnarounds = [turn];
-  partner.reset(0);
-  const dt = 1 / 60;
-  let runnerS = 0;
-  let waited = 0;
-  let leftWith: number | null = null;
-  for (let t = 0; t < 30 && leftWith === null; t += dt) {
-    const was = partner.state;
-    partner.update(dt, runnerS);
-    path.status.seenUntilS = path.length;
-    if (partner.state === 'turn') waited += dt;
-    if (was === 'turn' && partner.state !== 'turn') leftWith = runnerS;
-    runnerS += 0.9 * dt;
-  }
-  assert.ok(leftWith !== null, 'it set off again');
-  assert.ok(leftWith >= turn - 1.5, `set off with the runner ${(turn - leftWith).toFixed(2)} m short of the turn`);
-  assert.ok(waited > 1, `waited ${waited.toFixed(2)} s for them`);
-});
+for (const pacing of ['goal', 'match'] as const) {
+  test(`at a turnaround the buddy waits for a slower runner instead of running back past them (${pacing} pacing)`, () => {
+    const { path, turn } = straightOutAndBack();
+    const partner = new Partner(path);
+    partner.pacing = pacing;
+    partner.goalPace = 2.5;
+    partner.turnarounds = [turn];
+    partner.reset(0);
+    const dt = 1 / 60;
+    let runnerS = 0;
+    let waited = 0;
+    let leftWith: number | null = null;
+    for (let t = 0; t < 30 && leftWith === null; t += dt) {
+      const was = partner.state;
+      partner.update(dt, runnerS);
+      path.status.seenUntilS = path.length;
+      if (partner.state === 'turn') waited += dt;
+      if (was === 'turn' && partner.state !== 'turn') leftWith = runnerS;
+      runnerS += 0.9 * dt;
+    }
+    assert.ok(leftWith !== null, 'it set off again');
+    assert.ok(leftWith >= turn - 1.5, `set off with the runner ${(turn - leftWith).toFixed(2)} m short of the turn`);
+    // A pacer gets there well ahead; matching the runner, it's only its usual lead ahead.
+    const least = pacing === 'goal' ? 1 : 0.3;
+    assert.ok(waited > least, `waited ${waited.toFixed(2)} s for them`);
+  });
+}
 
 test('the buddy never overshoots a turnaround, even at a sprint', () => {
-  const { path, turn } = straightOutAndBack();
-  const partner = new Partner(path);
-  partner.goalPace = 4;
-  partner.turnarounds = [turn];
-  partner.reset(turn - 2.5);
-  let turned = false;
-  let furthest = 0;
-  for (let t = 0; t < 3; t += 1 / 30) {
-    partner.update(1 / 30, partner.s - 2);
-    if (partner.state === 'turn') turned = true;
-    if (!turned) furthest = Math.max(furthest, partner.s);
+  for (const pacing of ['goal', 'match'] as const) {
+    const { path, turn } = straightOutAndBack();
+    const partner = new Partner(path);
+    partner.pacing = pacing;
+    partner.goalPace = 4;
+    partner.turnarounds = [turn];
+    partner.reset(turn - 2.5);
+    let turned = false;
+    let furthest = 0;
+    // A runner sprinting at 4 m/s, right on its heels.
+    let runnerS = turn - 2.5;
+    for (let t = 0; t < 3; t += 1 / 30) {
+      partner.update(1 / 30, runnerS);
+      runnerS = Math.min(runnerS + 4 / 30, partner.s - 0.3);
+      if (partner.state === 'turn') turned = true;
+      if (!turned) furthest = Math.max(furthest, partner.s);
+    }
+    assert.ok(turned, `it turned (${pacing})`);
+    assert.ok(furthest <= turn + 1e-6, `ran to ${furthest.toFixed(3)} before turning at ${turn.toFixed(3)} (${pacing})`);
   }
-  assert.ok(turned, 'it turned');
-  assert.ok(furthest <= turn + 1e-6, `ran to ${furthest.toFixed(3)} before turning at ${turn.toFixed(3)}`);
 });
 
 // ---------------------------------------------------------------- projection
