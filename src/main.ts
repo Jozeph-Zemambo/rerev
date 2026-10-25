@@ -509,9 +509,12 @@ function endRun() {
 
 /** `laps` > 0 for a course run: how many times round (or there and back) `points` goes. */
 function layRoute(points: RoutePoint[], floorY: number, seeds: THREE.Vector3[], runnerS: number, laps = 0) {
-  // A course keeps what the map learned while you walked it.
+  // A course keeps what the map learned while you walked it, and is run as walked: no obstacle
+  // checks on a route the runner has just shown to be clear.
   if (mode?.kind !== 'course') map.reset();
   map.walkableStep = routeRun ? KERB : 0;
+  path.trustRoute = mode?.kind === 'course';
+  if (path.trustRoute) markers.clear();
   const view = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
   const phone = new THREE.Vector3().setFromMatrixPosition(view.matrixWorld);
   phoneAboveFloor = phone.y - floorY;
@@ -1389,7 +1392,7 @@ renderer.setAnimationLoop((time, frame) => {
     mascot.update(dt, seconds, partner.gait);
     shadow.position.set(point.x, point.y + 0.003, point.z);
 
-    if (sensorTick) markers.update(map, runner, now);
+    if (sensorTick && !path.trustRoute) markers.update(map, runner, now);
     if (now - lastPrune > 5) {
       lastPrune = now;
       map.prune(runner.x, runner.z, 40);
