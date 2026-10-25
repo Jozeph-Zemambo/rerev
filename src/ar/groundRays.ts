@@ -16,6 +16,7 @@ const RAYS: [pitch: number, yaw: number][] = [
  */
 export class GroundRays {
   private sources: XRHitTestSource[] = [];
+  private readonly hits: { x: number; y: number; z: number }[] = [];
   /** Floor hits since the field log last took them (field-test recording only). */
   readonly recent: number[][] = [];
 
@@ -36,17 +37,19 @@ export class GroundRays {
   }
 
   /** Returns how many rays hit the ground this frame. */
-  sample(frame: XRFrame, referenceSpace: XRReferenceSpace, map: SurfaceMap): number {
-    let hits = 0;
+  sample(frame: XRFrame, referenceSpace: XRReferenceSpace, map: SurfaceMap, now: number): number {
+    const hits = this.hits;
+    hits.length = 0;
     for (const source of this.sources) {
       const pose = frame.getHitTestResults(source)[0]?.getPose(referenceSpace);
       if (!pose) continue;
       const { x, y, z } = pose.transform.position;
-      map.addGroundSample(x, y, z, 2, map.groundTolerance(0.1));
+      hits.push({ x, y, z });
       if (this.recent.length < 200) this.recent.push([x, y, z]);
-      hits++;
     }
-    return hits;
+    // All together, so the map can tell the phone's world drifting from the floor changing.
+    map.addFloorHits(hits, now);
+    return hits.length;
   }
 
   get rays() {

@@ -559,7 +559,7 @@ export class Path {
     const span = this.stairs.find(st => s > st.toS && s <= st.toS + 3);
     if (!span) return false;
     // Check the whole corridor, not just the centre line: the hazard may be a cell beside it.
-    map.promoteToGround(this.xs[i], this.zs[i], CORRIDOR + 0.1, now, { y: span.toY, tolerance: 0.1 });
+    map.promoteToGround(this.xs[i], this.zs[i], CORRIDOR + 0.1, now, { from: span.toY - 0.1, to: span.toY + 0.1 });
     return this.hazardAtOffset(i, 0, map, now) === null;
   }
 
