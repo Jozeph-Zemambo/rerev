@@ -130,6 +130,16 @@ const REBASE_MAX = 0.3;
 const DRIFT_HITS = 3;
 const DRIFT_AGREE = 0.03;
 /**
+ * The drift can also creep in through a second floor plane at the new height, so hits land on
+ * both and cells get re-based one by one, leaving the rest of the map at the old height (field
+ * test: +12 cm, read by depth as a long "obstacle" along the walk). So when DRIFT_REBASES cells
+ * whose height the floor detection had already set are re-based by the same amount (within
+ * DRIFT_AGREE) within DRIFT_WINDOW seconds, the whole map shifts by that much. (Past a real step
+ * the floor detection finds new ground; it doesn't move ground it already knew.)
+ */
+const DRIFT_REBASES = 3;
+const DRIFT_WINDOW = 2;
+/**
  * Depth readings can drift (field tests: the near ones sank 15-40 cm below the floor while the
  * phone's floor detection still agreed). When most near readings in a frame say "drop" while
  * the floor detection agrees with the map, depth is the one that's wrong: that frame's drop
@@ -188,6 +198,8 @@ export const DEFAULT_TUNING = {
   rebaseMax: REBASE_MAX,
   driftHits: DRIFT_HITS,
   driftAgree: DRIFT_AGREE,
+  driftRebases: DRIFT_REBASES,
+  driftWindow: DRIFT_WINDOW,
   nearRange: NEAR_RANGE,
   distrustBelow: DISTRUST_BELOW,
   distrustMinPoints: DISTRUST_MIN_POINTS,
@@ -274,6 +286,7 @@ export class SurfaceMap {
   /** How much the last depth frame counted, 0-1 (field testing). */
   lastFrameQuality = 1;
   private readonly residuals: number[] = [];
+  private recentRebases: { cell: Cell; shift: number; at: number }[] = [];
   private readonly shifts: number[] = [];
   /** Thresholds in use: the defaults, unless an experiment overrides some. */
   readonly tuning: SurfaceTuning;
@@ -295,6 +308,7 @@ export class SurfaceMap {
     this.distrustedFrames = 0;
     this.drift = 0;
     this.floorAgreement = 1;
+    this.recentRebases.length = 0;
   }
 
   get size() {
@@ -730,12 +744,30 @@ export class SurfaceMap {
     rebase.at = time;
     rebase.y += (stored - rebase.y) / rebase.count;
     if (rebase.count < t.rebaseVotes) return;
+    const shift = rebase.y - cell.ground;
+    const hadGround = cell.groundWeight >= t.trustedWeight;
     cell.ground = rebase.y;
     cell.groundWeight = 3;
     this.clearEvidence(cell);
     cell.floorHitAt = time;
     rebase.count = 0;
     this.rebased++;
+    if (hadGround) this.driftByRebase(cell, shift, time);
+  }
+
+  /** A known cell re-based: are several moving together, so the whole world is? */
+  private driftByRebase(cell: Cell, shift: number, time: number) {
+    const t = this.tuning;
+    const recent = this.recentRebases;
+    while (recent.length && time - recent[0].at > t.driftWindow) recent.shift();
+    recent.push({ cell, shift, at: time });
+    const agreeing = recent.filter(r => Math.abs(r.shift - shift) <= t.driftAgree);
+    if (agreeing.length < t.driftRebases) return;
+    const mean = agreeing.reduce((sum, r) => sum + r.shift, 0) / agreeing.length;
+    this.drift += mean;
+    // Those cells were already moved to the new height; the shift now covers them.
+    for (const r of agreeing) r.cell.ground -= mean;
+    recent.length = 0;
   }
 
   private clearEvidence(cell: Cell) {
