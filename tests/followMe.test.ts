@@ -99,7 +99,8 @@ function simulate(walk: Walk, startDirection: THREE.Vector3) {
     const pace = walk.pace ?? 1.4;
     const runner = new THREE.Vector3();
     const wobble = noise(11);
-    const samples: { t: number; runner: RoutePoint; runnerS: number; buddyS: number; along: number }[] = [];
+    /** `ahead[d]`: the path's line d metres past the runner, as it was then. */
+    const samples: { t: number; runner: RoutePoint; runnerS: number; buddyS: number; along: number; ahead: RoutePoint[] }[] = [];
     const kept: string[] = [];
     let along = 0;
     let stopIndex = 0;
@@ -128,7 +129,8 @@ function simulate(walk: Walk, startDirection: THREE.Vector3) {
       });
       path.update(dt, clock, runnerS, map, clock, frame % 3 === 0);
       partner.update(dt, runnerS);
-      samples.push({ t: clock, runner: { x: runner.x, z: runner.z }, runnerS, buddyS: partner.s, along });
+      const ahead = [0, 1, 2, 3, 4, 5, 6].map(d => ({ ...path.centreAt(runnerS + d, { x: 0, z: 0 }) }));
+      samples.push({ t: clock, runner: { x: runner.x, z: runner.z }, runnerS, buddyS: partner.s, along, ahead });
     }
     return { path, partner, follow, track, samples, kept };
   } finally {
@@ -147,12 +149,11 @@ test('down a hallway a few degrees off where the camera faced, the path stays on
   // Started facing straight ahead (-z); actually walking 8° to the right of that for 30 m.
   const a = (8 * Math.PI) / 180;
   const walk = { points: [{ x: 0, z: 0 }, { x: Math.sin(a) * 30, z: -Math.cos(a) * 30 }] };
-  const { path, samples, kept, track } = simulate(walk, new THREE.Vector3(0, 0, -1));
+  const { samples, kept, track } = simulate(walk, new THREE.Vector3(0, 0, -1));
   let worst = 0;
-  const p = new THREE.Vector3();
   for (const s of samples.filter(s => s.along > 5 && s.along < 22)) {
     // Ahead of the buddy, out to 6 m in front of the runner.
-    for (let d = 2; d <= 6; d += 1) worst = Math.max(worst, offTrack(track, path.centreAt(s.runnerS + d, p), s.along));
+    for (let d = 2; d <= 6; d += 1) worst = Math.max(worst, offTrack(track, s.ahead[d], s.along));
   }
   assert.ok(worst < 0.5, `path ahead strayed ${worst.toFixed(2)} m from the hallway line`);
   assert.deepEqual(kept, []);
@@ -167,7 +168,7 @@ test('turning a corner bends the path onto the new street and the buddy stays ah
   for (const s of after) {
     // (Short of the end of the walk: past it, there's no street to compare with.)
     for (let d = 2; d <= 5 && s.along + d < 24.5; d++) {
-      const off = offTrack(track, path.centreAt(s.runnerS + d, p), 10);
+      const off = offTrack(track, s.ahead[d], 10);
       assert.ok(off < 0.5, `${off.toFixed(2)} m off the new street at +${d} m, t ${s.t.toFixed(1)}`);
     }
   }
@@ -201,9 +202,8 @@ test('walking back past the buddy brings it round ahead on the new way, not back
 
 test('crossing the street sideways: the path shifts over to the far side', () => {
   const walk = { points: [{ x: 0, z: 0 }, { x: 0, z: -8 }, { x: 4, z: -13 }, { x: 4, z: -30 }] };
-  const { path, samples, track } = simulate(walk, new THREE.Vector3(0, 0, -1));
-  const p = new THREE.Vector3();
+  const { samples, track } = simulate(walk, new THREE.Vector3(0, 0, -1));
   for (const s of samples.filter(s => s.along > 18 && s.along < 26)) {
-    for (let d = 2; d <= 5; d++) assert.ok(offTrack(track, path.centreAt(s.runnerS + d, p), 8) < 0.5, `+${d} m off at t ${s.t.toFixed(1)}`);
+    for (let d = 2; d <= 5; d++) assert.ok(offTrack(track, s.ahead[d], 8) < 0.5, `+${d} m off at t ${s.t.toFixed(1)}`);
   }
 });

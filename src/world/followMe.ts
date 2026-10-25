@@ -13,11 +13,13 @@ import type { Path, RoutePoint } from './path';
 type XZ = { x: number; z: number };
 
 /** Direction of travel is measured over about this much of the runner's own track. */
-export const HEADING_WINDOW = 3;
+export const HEADING_WINDOW = 2.5;
 /** The track keeps a point each time the runner has moved this far (smaller wobbles don't count). */
 const STRIDE = 0.25;
 /** Over the window, they must have got at least this far from where it starts for a direction. */
 const MIN_DISPLACEMENT = 1;
+/** `recent` direction: over about this much track. */
+const RECENT_WINDOW = 1.2;
 /** A jump this far in one update is tracking relocalising, not running: start the track afresh. */
 const JUMP = 2;
 
@@ -33,8 +35,12 @@ const RELAY_GAP = 0.4;
 const ANCHOR_PAST_BUDDY = 0.2;
 /** The re-laid stretch bends from the buddy onto the runner's line over about this far. */
 const BLEND = 3;
-/** The buddy counts as passed once it's less than this far ahead of the runner, along their direction... */
+/**
+ * The buddy counts as left behind once it's less than this far ahead of the runner along their
+ * direction, or this far to the side of their line (they crossed the street, it didn't)...
+ */
 const PASS_LEAD = 0.2;
+const PASS_SIDE = 0.8;
 /** ...for this long. */
 const PASS_HOLD = 0.4;
 /** After being passed it picks up this far ahead of the runner, joining their line over this far. */
@@ -46,9 +52,10 @@ const LAY_AHEAD = 25;
 const EXTEND_WHEN = 15;
 /**
  * While the runner follows the path round an obstacle (it's bent at least this far sideways where
- * they are), their sidestep isn't a change of direction: no re-lays until they've gone a window's
- * length past it. A detour still ahead of them doesn't count: bending the path onto their line
- * is often what clears it (a hallway wall the old line ran into).
+ * they are, and they're nearer the bent line than the straight one), their sidestep isn't a
+ * change of direction: no re-lays until they've gone a window's length past it. A detour they
+ * aren't on doesn't count: bending the path onto their line is often what clears it (a hallway
+ * wall the old line ran into, or a false alarm at their feet).
  */
 const ON_DETOUR = 0.15;
 
@@ -59,6 +66,11 @@ const ON_DETOUR = 0.15;
 export class TravelHeading {
   /** Unit vector, or null until they've walked far enough to tell. Holds its last value when they stop. */
   heading: XZ | null = null;
+  /**
+   * The way they've gone over just the last metre or so: rougher, but already round a corner
+   * while `heading` is still turning. Null until known; holds when they stop.
+   */
+  recent: XZ | null = null;
   /** Metres travelled along the track (stride by stride, so standing-still jitter adds nothing). */
   odometer = 0;
   private trail: XZ[] = [];
@@ -70,6 +82,7 @@ export class TravelHeading {
 
   reset() {
     this.heading = null;
+    this.recent = null;
     this.odometer = 0;
     this.trail = [];
   }
@@ -91,6 +104,7 @@ export class TravelHeading {
       this.odometer += moved;
       if (this.trail.length > Math.ceil((this.window * 3) / STRIDE)) this.trail.shift();
     }
+    this.recent = this.direction(x, z, RECENT_WINDOW, RECENT_WINDOW * 0.8) ?? this.recent;
     // The last window's worth of track, and the straight line that best fits it (its principal
     // axis): side-to-side sway averages out instead of tilting the direction.
     let i = this.trail.length - 1;
@@ -131,6 +145,20 @@ export class TravelHeading {
       hz = -hz;
     }
     this.heading = { x: hx, z: hz };
+  }
+
+  /** Straight from where the track was `back` metres ago to here, if that's at least `least` away. */
+  private direction(x: number, z: number, back: number, least: number): XZ | null {
+    let i = this.trail.length - 1;
+    let along = Math.hypot(x - this.trail[i].x, z - this.trail[i].z);
+    while (i > 0 && along < back) {
+      along += Math.hypot(this.trail[i].x - this.trail[i - 1].x, this.trail[i].z - this.trail[i - 1].z);
+      i--;
+    }
+    const dx = x - this.trail[i].x;
+    const dz = z - this.trail[i].z;
+    const length = Math.hypot(dx, dz);
+    return length >= least ? { x: dx / length, z: dz / length } : null;
   }
 }
 
@@ -210,8 +238,7 @@ export class FollowMe {
   update(now: number, runner: XZ, runnerS: number, path: Path, partner: Partner): FollowEvent | null {
     this.travel.update(runner.x, runner.z);
     if (!path.ready) return null;
-    const side = path.detourAt(runnerS, this.at);
-    if (Math.hypot(side.x, side.z) > ON_DETOUR) this.quietUntil = this.travel.odometer + HEADING_WINDOW;
+    if (this.onDetour(runner, runnerS, path)) this.quietUntil = this.travel.odometer + HEADING_WINDOW;
 
     if (path.length - Math.max(runnerS, partner.s) < EXTEND_WHEN) return this.extend(path);
 
@@ -222,16 +249,25 @@ export class FollowMe {
       return null;
     }
 
+    // Where the buddy is (round a detour too, which the runner follows it round).
     path.centreAt(partner.s, this.at);
-    const lead = (this.at.x - runner.x) * heading.x + (this.at.z - runner.z) * heading.z;
-    if (lead < PASS_LEAD) {
+    path.detourAt(partner.s, this.behind);
+    const bx = this.at.x + this.behind.x - runner.x;
+    const bz = this.at.z + this.behind.z - runner.z;
+    const lead = bx * heading.x + bz * heading.z;
+    // (Stepping round something, the runner's line is skewed for a moment: only being passed counts.)
+    const quiet = this.travel.odometer < this.quietUntil;
+    const aside = quiet ? 0 : Math.abs(bx * heading.z - bz * heading.x);
+    if (lead < PASS_LEAD || aside > PASS_SIDE) {
       this.passedSince ??= now;
       this.offSince = null;
-      return now - this.passedSince >= PASS_HOLD ? this.respawn(now, runner, heading, runnerS, path, partner) : null;
+      // Picking up again is a fresh start, so it goes the way they're going right now (mid-turn,
+      // the smoothed direction is still swinging round).
+      return now - this.passedSince >= PASS_HOLD ? this.respawn(now, runner, this.travel.recent ?? heading, runnerS, path, partner) : null;
     }
     this.passedSince = null;
 
-    if (this.travel.odometer < this.quietUntil) {
+    if (quiet) {
       this.offSince = null;
       return null;
     }
@@ -253,6 +289,16 @@ export class FollowMe {
     this.relayed(now);
     this.bends++;
     return { kind: 'bend', fromS, error };
+  }
+
+  /** Is the runner stepping round something with the path (nearer its bent line than its own)? */
+  private onDetour(runner: XZ, runnerS: number, path: Path): boolean {
+    const side = path.detourAt(runnerS, this.behind);
+    if (Math.hypot(side.x, side.z) <= ON_DETOUR) return false;
+    const centre = path.centreAt(runnerS, this.at);
+    const offCentre = Math.hypot(runner.x - centre.x, runner.z - centre.z);
+    const offBent = Math.hypot(runner.x - centre.x - side.x, runner.z - centre.z - side.z);
+    return offBent < offCentre;
   }
 
   private respawn(now: number, runner: XZ, heading: XZ, runnerS: number, path: Path, partner: Partner): FollowEvent {
