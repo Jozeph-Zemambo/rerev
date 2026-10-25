@@ -33,9 +33,15 @@ const BLIND_AHEAD = 0.5;
 const BLIND_AFTER = 3;
 const SEEN_MARGIN = 0.8;
 /**
- * Short of something that may be about to become an obstacle (not confirmed, not ruled out), it
- * waits this far back and looks, until that's settled one way or the other.
+ * Near something that may be about to become an obstacle (not confirmed, not ruled out), it
+ * slows to a jog within SUSPECT_SLOW, so the confirmation (then a detour) can catch up before it
+ * gets there. It doesn't stop for one: with phone depth something is nearly always suspect, and
+ * stopping made it stop-start down a whole hallway (replays: 51 state changes a minute against
+ * 5.5, for no measurable gain in clearance). Popping up ahead after being passed, it never lands
+ * closer than SUSPECT_SHORT to one.
  */
+const SUSPECT_SLOW = 1.2;
+const SUSPECT_CREEP = 0.4;
 const SUSPECT_SHORT = 0.5;
 /**
  * A blocked path has to stay clear this long before it sets off again: right at a hazard, noisy
@@ -188,14 +194,12 @@ export class Partner {
     }
     const stalled = this.farSighted && runnerS - this.runnerAtEdge > EDGE_STALL;
     const suspectAt = this.path.status.suspectAtS;
-    const seenLimit = Math.min(
-      stalled || this.blindFor >= BLIND_AFTER ? seenUntil - SEEN_MARGIN : Infinity,
-      suspectAt === null ? Infinity : suspectAt - SUSPECT_SHORT,
-    );
+    const seenLimit = stalled || this.blindFor >= BLIND_AFTER ? seenUntil - SEEN_MARGIN : Infinity;
+    const suspectLimit = suspectAt === null ? Infinity : suspectAt - SUSPECT_SHORT;
     if (this.skipped) {
       // Picked up ahead of the runner: never on top of something blocking or suspect.
       this.skipped = false;
-      const limit = Math.min(seenLimit, blockedAt === null ? Infinity : blockedAt - STOP_SHORT);
+      const limit = Math.min(seenLimit, suspectLimit, blockedAt === null ? Infinity : blockedAt - STOP_SHORT);
       if (this.s > limit) this.s = Math.max(limit, Math.min(this.s, runnerS + 0.5));
     }
     const lead = this.s - runnerS;
@@ -248,6 +252,7 @@ export class Partner {
       const cap = Math.sqrt(TURN_SPEED * TURN_SPEED + 2 * Math.max(0, brake) * Math.max(0, turnAt - this.s));
       this.speed = Math.min(this.speed, cap);
     }
+    if (suspectAt !== null && suspectAt - this.s < SUSPECT_SLOW) this.speed = Math.min(this.speed, SUSPECT_CREEP);
     let next = this.s + this.speed * dt;
     // Never run past a turnaround without turning at it.
     if (this.nextTurn < this.turnarounds.length) next = Math.min(next, this.turnarounds[this.nextTurn]);
