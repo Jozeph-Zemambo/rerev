@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buddyMotion, type Gait } from '../src/partner/buddyMotion';
-import { BUILT_HEIGHT, PACE_DEFAULTS } from '../src/partner/buddyPace';
+import { buddyMotion, MOVING_LEG_SPEED, SLOW_HYSTERESIS, type Gait } from '../src/partner/buddyMotion';
+import { BUILT_HEIGHT, PACE_DEFAULTS, pacePlan } from '../src/partner/buddyPace';
 
 const H = 1.3;
 const gait = (g: Partial<Gait>): Gait => ({ speed: 0, inPlace: false, grade: 0, ...g });
@@ -28,9 +28,27 @@ test('too slow to run, or looking from a standstill, jogs on the spot', () => {
 
 test('slowing down keeps running a little past the too-slow line, so it does not flicker', () => {
   // Just under the line: a buddy already running keeps going; one on the spot stays there.
-  const justUnder = 0.79 * (H / BUILT_HEIGHT) * PACE_DEFAULTS.minLegSpeed * 0.95;
+  const justUnder = 0.79 * (H / BUILT_HEIGHT) * MOVING_LEG_SPEED * 0.95;
   assert.equal(clipOf({ state: 'run', speed: justUnder }, true), 'pace');
   assert.equal(clipOf({ state: 'run', speed: justUnder }, false), 'JogInPlace');
+  const wellUnder = 0.79 * (H / BUILT_HEIGHT) * MOVING_LEG_SPEED * SLOW_HYSTERESIS * 0.95;
+  assert.equal(clipOf({ state: 'run', speed: wellUnder }, true), 'JogInPlace');
+});
+
+test('keeping pace with a slow walker jogs along slowly, without swapping clips as their speed wobbles', () => {
+  // A walker at about half a metre a second, wobbling ±0.15 m/s.
+  let running = false;
+  const clips = new Set<string>();
+  for (let t = 0; t < 20; t += 0.1) {
+    const m = buddyMotion(gait({ state: 'run', speed: 0.5 + 0.15 * Math.sin(t * 2.3) }), running, H);
+    running = m.kind === 'pace';
+    clips.add(m.kind === 'pace' ? 'pace' : m.clip);
+  }
+  assert.deepEqual([...clips], ['pace']);
+  // Faster than the old too-slow line: the jog clip, playing a bit slow.
+  const plan = pacePlan(0.5, H);
+  assert.equal(plan.clip, 'Run_Jogging');
+  assert.ok(plan.legSpeed < PACE_DEFAULTS.minLegSpeed && plan.legSpeed > MOVING_LEG_SPEED);
 });
 
 test('waiting for the runner jogs on the spot and beckons', () => {

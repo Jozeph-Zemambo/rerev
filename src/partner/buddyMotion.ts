@@ -1,4 +1,4 @@
-import { pacePlan, PACE_DEFAULTS, type BuddyClip } from './buddyPace';
+import { pacePlan, type BuddyClip } from './buddyPace';
 import type { PartnerState } from './partner';
 
 export type Gait = {
@@ -29,10 +29,17 @@ const JOG_IN_PLACE: BuddyMotion = { kind: 'loop', clip: 'JogInPlace' };
 const DONE: BuddyMotion = { kind: 'loop', clip: 'Wave' };
 
 /**
- * Once running, the legs keep going down to this fraction of the slowest natural leg speed
- * before switching to jogging on the spot, so a speed hovering at the threshold doesn't flicker.
+ * Slowest leg speed (fraction of the jog clip's own) it jogs along at. Below the pacer's usual
+ * minimum (PACE_DEFAULTS.minLegSpeed) the jog is a little slow-motion, but a buddy matching a
+ * slow walker (~0.5 m/s) is still moving: jogging on the spot there would slide its feet along
+ * the floor, and a walker's speed wobbling round the minimum would swap clips every second.
  */
-const SLOW_HYSTERESIS = 0.85;
+export const MOVING_LEG_SPEED = 0.4;
+/**
+ * Once jogging, the legs keep going down to this fraction of MOVING_LEG_SPEED before switching
+ * to jogging on the spot, so a speed hovering at the threshold doesn't flicker.
+ */
+export const SLOW_HYSTERESIS = 0.75;
 
 /**
  * Which animation for a gait. `running` says whether the buddy is running along right now (for
@@ -57,7 +64,7 @@ export function buddyMotion(gait: Gait, running: boolean, height: number): Buddy
 }
 
 function paceOrJog(speed: number, running: boolean, height: number): BuddyMotion {
-  const minLegSpeed = PACE_DEFAULTS.minLegSpeed * (running ? SLOW_HYSTERESIS : 1);
+  const minLegSpeed = MOVING_LEG_SPEED * (running ? SLOW_HYSTERESIS : 1);
   const plan = pacePlan(speed, height, null, { minLegSpeed });
   return plan.tooSlow ? JOG_IN_PLACE : { kind: 'pace', speed };
 }
