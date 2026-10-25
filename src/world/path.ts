@@ -412,14 +412,26 @@ export class Path {
    * Called every frame: drape the line ahead onto known ground, ease detours, and redraw the
    * dashes around the runner. `checkHazards` re-plans detours (run it ~10x a second).
    */
+  /**
+   * Run the route as given, with no obstacle checks: a course the runner has just walked is
+   * clear by definition, and phone depth is noisy enough to invent obstacles on it.
+   */
+  trustRoute = false;
+
   update(dt: number, timeSeconds: number, runnerS: number, map: SurfaceMap, now: number, checkHazards: boolean) {
     if (!this.ready) return;
     const i0 = this.index(runnerS - DASHES_BEHIND - 1);
     const i1 = this.index(runnerS + TERRAIN_AHEAD);
 
     this.drape(i0, i1, map, dt);
-    // A re-laid line is planned straight away, not at the next hazard check.
-    if (checkHazards || this.replan) {
+    if (this.trustRoute) {
+      this.status.blockedAtS = null;
+      this.status.blockReason = null;
+      this.status.detouring = false;
+      this.status.seenUntilS = this.length;
+      this.status.suspectAtS = null;
+    } else if (checkHazards || this.replan) {
+      // A re-laid line is planned straight away, not at the next hazard check.
       this.replan = false;
       this.planDetours(runnerS, map, now);
       this.status.seenUntilS = this.seenUntil(runnerS, map);
